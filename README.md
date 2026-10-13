@@ -23,8 +23,10 @@ Grab the latest release for your system from [Releases](https://github.com/MCbab
 
 | System | File |
 | --- | --- |
-| Windows 10/11 | `Playkit_x.y.z_x64-setup.exe` |
-| Linux | `Playkit_x.y.z_amd64.AppImage` or `.deb` |
+| Windows 10/11 | `Playkit-windows-x64.exe`, no installer needed |
+| Linux | `Playkit-linux-x86_64.AppImage`, make it executable and start it |
+
+Every commit to `main` publishes a prerelease with both files and the loader `dxgi.dll` on its own.
 
 On first start Playkit finds the game, installs the mod loader and, on Linux, adds `WINEDLLOVERRIDES="dxgi=n,b"` to the game's Steam launch options while keeping the options you already have.
 
@@ -39,7 +41,7 @@ app             Tauri desktop app
 ui              the app's web frontend (plain HTML, CSS and JavaScript)
 ```
 
-The loader hooks two engine functions. `FPakPlatformFile::IsNonPakFilenameAllowed` always allows loose files, and `FPakFile::Find` reports a file as missing from the pak when the same file exists in the game's `Content` folder, so the loose version wins. It writes `playkit-loader.log` next to the game executable.
+The loader is its own small project and works with other Unreal Engine 4 games too, see [crates/loader](crates/loader/README.md). It hooks two engine functions. `FPakPlatformFile::IsNonPakFilenameAllowed` always allows loose files, and `FPakFile::Find` reports a file as missing from the pak when the same file exists in the game's `Content` folder, so the loose version wins. It writes `playkit-loader.log` next to the game executable.
 
 ## Several mods, one file
 

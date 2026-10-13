@@ -1,0 +1,87 @@
+name: Prerelease
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prerelease
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the loader
+        run: cargo build -p playkit-loader --release
+      - name: Build Playkit
+        working-directory: app
+        run: npx --yes @tauri-apps/cli@2 build --no-bundle
+      - name: Collect files
+        shell: bash
+        run: |
+          mkdir dist
+          cp target/release/playkit.exe dist/Playkit-windows-x64.exe
+          cp target/release/dxgi.dll dist/dxgi.dll
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev gcc-mingw-w64-x86-64 libfuse2
+      - name: Build Playkit
+        working-directory: app
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: npx --yes @tauri-apps/cli@2 build --bundles appimage
+      - name: Collect files
+        run: |
+          mkdir dist
+          cp target/release/bundle/appimage/*.AppImage dist/Playkit-linux-x86_64.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+
+  release:
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RUN: ${{ github.run_number }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          short="${SHA::7}"
+          title="$(printf '%s' "$MESSAGE" | head -n 1)"
+          printf 'Automatic build of %s: %s\n\n' "$short" "$title" > notes.md
+          printf -- '- **Playkit-windows-x64.exe**: Playkit for Windows 10 and 11, no installer needed\n' >> notes.md
+          printf -- '- **Playkit-linux-x86_64.AppImage**: Playkit for Linux, make it executable and start it\n' >> notes.md
+          printf -- '- **dxgi.dll**: the loose file loader on its own, for any Unreal Engine 4 game\n' >> notes.md
+          gh release create "build-$RUN" dist/* --repo "$REPO" --target "$SHA" --prerelease \
+            --title "Build $RUN ($short)" --notes-file notes.md
