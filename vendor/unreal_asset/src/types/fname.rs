@@ -160,7 +160,10 @@ impl FName {
                     name_map: _,
                 },
             ) => self.get_content().eq(&other.get_content()),
-            _ => self.eq(other),
+            _ => {
+                self.get_number() == other.get_number()
+                    && self.get_content().eq(&other.get_content())
+            }
         }
     }
 }

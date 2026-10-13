@@ -1,7 +1,9 @@
 mod code;
+mod contains;
 mod refs;
 
 use code::{CodeDiff, Relocate, Shift};
+pub use contains::contains;
 use refs::IndexMap;
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -520,7 +522,7 @@ fn merge_export(
         (Export::ClassExport(bc), Export::ClassExport(vc)) => vc
             .func_map
             .iter()
-            .filter(|(_, k, _)| bc.func_map.get_by_key(*k).is_none())
+            .filter(|(_, k, _)| !bc.func_map.iter().any(|(_, bk, _)| bk.eq_content(k)))
             .map(|(_, k, v)| {
                 let mut k = k.clone();
                 refs::intern(&mut k, r);

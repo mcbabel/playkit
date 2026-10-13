@@ -4,7 +4,7 @@ use playkit_core::index::{self, Index, Mod};
 use playkit_core::install::{self, Health, State};
 use playkit_core::loader::{self, Bundled};
 use playkit_core::platform::{self, Platform};
-use playkit_core::{package, steam, APP_ID};
+use playkit_core::{anticheat, package, steam, APP_ID};
 use serde::Serialize;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -29,6 +29,7 @@ pub struct AppState {
     config: Mutex<Config>,
     index: tokio::sync::Mutex<Option<Index>>,
     busy: tokio::sync::Mutex<()>,
+    adopted: Mutex<bool>,
 }
 
 impl AppState {
@@ -37,6 +38,7 @@ impl AppState {
             config: Mutex::new(config),
             index: tokio::sync::Mutex::new(None),
             busy: tokio::sync::Mutex::new(()),
+            adopted: Mutex::new(false),
         }
     }
 
@@ -152,6 +154,13 @@ pub struct LocalMod {
 pub async fn mods(state: Tauri<'_, AppState>, refresh: bool) -> Res<ModList> {
     let idx = state.index(refresh).await?;
     let game = state.game().ok();
+    if let Some(g) = &game {
+        let first = !std::mem::replace(&mut *state.adopted.lock().map_err(err)?, true);
+        if refresh || first {
+            let _busy = state.busy.lock().await;
+            let _ = install::adopt(g, &idx).await;
+        }
+    }
     let installed = game
         .as_ref()
         .map(|g| State::load(g).unwrap_or_default())
@@ -278,6 +287,7 @@ pub struct SetupResult {
 pub async fn setup(state: Tauri<'_, AppState>) -> Res<SetupResult> {
     let game = state.game()?;
     loader::install_dll(&game, &bundled()).map_err(err)?;
+    anticheat::patch(&game).map_err(err)?;
     let launch_option_error = match platform::detect().os {
         platform::Os::Linux => loader::apply_launch_option(&game).err().map(err),
         _ => None,
@@ -289,7 +299,9 @@ pub async fn setup(state: Tauri<'_, AppState>) -> Res<SetupResult> {
 
 #[tauri::command]
 pub async fn remove_loader(state: Tauri<'_, AppState>) -> Res<()> {
-    loader::remove_dll(&state.game()?).map_err(err)
+    let game = state.game()?;
+    loader::remove_dll(&game).map_err(err)?;
+    anticheat::restore(&game).map_err(err)
 }
 
 #[tauri::command]

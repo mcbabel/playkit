@@ -1,3 +1,4 @@
+use crate::anticheat::{self, AntiCheat};
 use crate::game::Game;
 use crate::platform::{Os, Platform};
 use crate::{fsx, steam, Error, Result, APP_ID};
@@ -28,6 +29,7 @@ pub enum DllState {
 pub struct Status {
     pub dll: DllState,
     pub launch_option: LaunchOption,
+    pub anti_cheat: AntiCheat,
 }
 
 impl Status {
@@ -37,6 +39,7 @@ impl Status {
                 self.launch_option,
                 LaunchOption::Ok | LaunchOption::NotNeeded
             )
+            && self.anti_cheat != AntiCheat::Original
     }
 }
 
@@ -70,6 +73,7 @@ pub fn status(game: &Game, platform: &Platform, bundled: &Bundled) -> Status {
     Status {
         dll,
         launch_option: launch_option_state(game, platform),
+        anti_cheat: anticheat::status(game),
     }
 }
 

@@ -351,6 +351,134 @@ async fn build(
     Ok(out)
 }
 
+pub async fn adopt(game: &Game, index: &Index) -> Result<Vec<String>> {
+    let mut state = State::load(game)?;
+    let mut pak: Option<Pak> = None;
+    let mut adopted = Vec::new();
+    for m in &index.mods {
+        if state.mods.contains_key(&m.id) || m.files.is_empty() || !crate::package::valid_id(&m.id)
+        {
+            continue;
+        }
+        let present = m.files.iter().all(|f| {
+            crate::package::check_path(&f.path).is_ok()
+                && game.resolve(&f.path).is_ok_and(|p| p.is_file())
+        });
+        if !present {
+            continue;
+        }
+        let Ok(fresh) = build(game, index, m, &|_, _| {}).await else {
+            continue;
+        };
+        if !already_there(game, &index.game.pak_key, m, &fresh, &mut pak)? {
+            continue;
+        }
+        for (rel, data) in &fresh {
+            fsx::write_atomic(&cache_path(game, &m.id, rel), data)?;
+        }
+        state.next_seq += 1;
+        state.mods.insert(
+            m.id.clone(),
+            Installed {
+                name: m.name.clone(),
+                version: m.version.clone(),
+                seq: state.next_seq,
+                requires: m.requires.clone(),
+                auto: false,
+                files: m
+                    .files
+                    .iter()
+                    .map(|f| InstalledFile {
+                        path: f.path.clone(),
+                        sha256: f.sha256.to_ascii_lowercase(),
+                    })
+                    .collect(),
+            },
+        );
+        for f in &m.files {
+            let sha = fsx::sha256_file(&game.resolve(&f.path)?)?;
+            state.written.entry(f.path.clone()).or_insert(sha);
+        }
+        adopted.push(m.name.clone());
+    }
+    if !adopted.is_empty() {
+        state.save(game)?;
+    }
+    Ok(adopted)
+}
+
+fn already_there(
+    game: &Game,
+    pak_key: &str,
+    m: &Mod,
+    fresh: &HashMap<String, Vec<u8>>,
+    pak: &mut Option<Pak>,
+) -> Result<bool> {
+    let stems: BTreeSet<String> = m.files.iter().map(|f| stem(&f.path)).collect();
+    for s in stems {
+        let paths: Vec<&String> = m
+            .files
+            .iter()
+            .map(|f| &f.path)
+            .filter(|p| stem(p) == s)
+            .collect();
+        let exact = paths.iter().all(|p| {
+            game.resolve(p)
+                .ok()
+                .and_then(|path| fsx::sha256_file(&path).ok())
+                .is_some_and(|h| fresh.get(*p).is_some_and(|d| fsx::sha256(d) == h))
+        });
+        if exact {
+            continue;
+        }
+        let Some(any) = paths.first() else { continue };
+        let lower = any.to_ascii_lowercase();
+        if !(lower.ends_with(".uasset") || lower.ends_with(".umap") || lower.ends_with(".uexp")) {
+            return Ok(false);
+        }
+        let stem_path = &any[..any.rfind('.').expect("has extension")];
+        if pak.is_none() {
+            *pak = Some(Pak::open(&game.pak(), pak_key)?);
+        }
+        let pk = pak.as_mut().expect("pak opened");
+        let header = [".uasset", ".umap"]
+            .iter()
+            .map(|e| format!("{stem_path}{e}"))
+            .find(|h| paths.iter().any(|p| p.eq_ignore_ascii_case(h)) || pk.contains(h));
+        let Some(header) = header else {
+            return Ok(false);
+        };
+        let uexp = format!("{stem_path}.uexp");
+        let (Ok(bh), Ok(bx)) = (pk.read(&header), pk.read(&uexp)) else {
+            return Ok(false);
+        };
+        let pick =
+            |rel: &str, base: &Vec<u8>| fresh.get(rel).cloned().unwrap_or_else(|| base.clone());
+        let disk = |rel: &str, base: &Vec<u8>| {
+            game.resolve(rel)
+                .ok()
+                .and_then(|p| std::fs::read(p).ok())
+                .unwrap_or_else(|| base.clone())
+        };
+        let base = playkit_merge::Files {
+            uasset: bh.clone(),
+            uexp: bx.clone(),
+        };
+        let modded = playkit_merge::Files {
+            uasset: pick(&header, &bh),
+            uexp: pick(&uexp, &bx),
+        };
+        let current = playkit_merge::Files {
+            uasset: disk(&header, &bh),
+            uexp: disk(&uexp, &bx),
+        };
+        if !playkit_merge::contains(&base, &modded, &current).unwrap_or(false) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 pub async fn install(
     game: &Game,
     index: &Index,

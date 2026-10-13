@@ -455,6 +455,7 @@ function renderSetup() {
   const game = s.game;
   const dll = s.loader?.dll;
   const lo = s.loader?.launch_option;
+  const ac = s.loader?.anti_cheat;
   const linux = s.platform.os === "linux";
   const osName = s.platform.steam_deck ? "Steam Deck" : s.platform.name;
   const dllText = {
@@ -466,7 +467,7 @@ function renderSetup() {
   const launch = !linux
     ? null
     : step(
-        3,
+        ac && ac !== "absent" ? 4 : 3,
         lo?.state === "ok" ? "done" : "todo",
         "Steam launch option",
         el("p", { text: "On Linux the game runs through Proton, which needs to be told to load the mod loader." }),
@@ -495,6 +496,9 @@ function renderSetup() {
           : [el("p", { text: s.game_error || "Project Playtime was not found." }), el("button", { class: "btn btn-accent", onclick: chooseGameDir }, icon("folder", 18, "#1A1405"), "Choose folder")]
       ),
       step(2, dll === "current" || dll === "foreign" ? "done" : game ? "todo" : "", "Mod loader", el("p", { text: "A small loader next to the game lets it read mod files from its Content folder." }), dll ? el("p", { class: dll === "current" ? "good" : dll === "foreign" ? "info" : "warn", text: dllText }) : null),
+      ac && ac !== "absent"
+        ? step(3, ac === "patched" ? "done" : "todo", "Easy Anti-Cheat settings", el("p", { text: "Playkit sets the product, sandbox and deployment IDs in EasyAntiCheat/Settings.json to 123. The original file is kept as a backup." }), ac === "patched" ? el("p", { class: "good", text: "Already set." }) : null)
+        : null,
       launch
     ),
     el(
