@@ -1,0 +1,6 @@
+// GameInstance part of the Steam invite mod (port of uatool pminvitegi):
+// the +connect_lobby start parameter is handled only once per game start.
+//
+//   bpscript patch MultiplayerGameInstance.uasset invite_gi.bps out.uasset
+
+var PM_InviteCmdDone: bool;

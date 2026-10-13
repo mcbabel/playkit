@@ -390,6 +390,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bpscript"
+version = "0.2.0"
+dependencies = [
+ "ordered-float",
+ "playkit-merge",
+ "thiserror 2.0.21",
+ "unreal_asset",
+]
+
+[[package]]
 name = "brotli"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

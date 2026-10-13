@@ -41,7 +41,7 @@ impl MovieSceneEvalTemplatePtrProperty {
 
         let mut value: Vec<Property> = Vec::new();
 
-        let type_name_fname = asset.add_fname("TypeName");
+        let type_name_fname = FName::from_slice("TypeName");
         let new_ancestry = ancestry.with_parent(name.clone());
         let type_name = StrProperty::new(
             asset,

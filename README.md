@@ -64,7 +64,12 @@ Run the tests with `cargo test --workspace`.
 
 ## Making mods
 
-See [CONTRIBUTING in the mod list](https://github.com/MCbabel/playkit-mods/blob/main/CONTRIBUTING.md), or use **Submit a mod** inside the app.
+To publish a mod, see [CONTRIBUTING in the mod list](https://github.com/MCbabel/playkit-mods/blob/main/CONTRIBUTING.md), or use **Submit a mod** inside the app.
+
+Two tools make writing mods easier:
+
+- **[bpscript](crates/bpscript)**: turns the Blueprint bytecode of an asset into readable text and back, byte for byte. Patch files add variables, functions and events, and hook into existing functions (`before`, `after`, `replace`). This replaces hand-written bytecode patches, and the results still combine with other mods.
+- **[Native C++ mods](crates/loader#native-c-mods)**: the loader runs C and C++ mods that hook Blueprint functions, call any game function and patch native code. It can also generate typed C++ headers of the whole game.
 
 ## License
 

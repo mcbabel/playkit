@@ -1,0 +1,20 @@
+[package]
+name = "bpscript"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "bpscript"
+
+[[bin]]
+name = "bpscript"
+path = "src/main.rs"
+
+[dependencies]
+unreal_asset = { path = "../../vendor/unreal_asset" }
+ordered-float = "3"
+thiserror.workspace = true
+
+[dev-dependencies]
+playkit-merge = { path = "../merge" }

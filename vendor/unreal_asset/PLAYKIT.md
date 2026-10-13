@@ -7,4 +7,5 @@ Copy of [unreal_asset 0.1.16](https://github.com/AstroTechies/unrealmodding) (MI
 - public fields on `FScriptText`, `FEnumProperty` and `FBoolProperty`
 - length check for `UnknownProperty`
 - `kismet::walk`: generic traversal of every sub-expression and package index
+- MovieScene pointer properties keep their synthetic `TypeName` out of the name map, so widgets with animations re-save unchanged
 - removed the Ace Combat 7 decryption and the Oodle link setup

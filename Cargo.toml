@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/merge", "crates/pack", "crates/loader", "app"]
+members = ["crates/core", "crates/merge", "crates/pack", "crates/loader", "crates/bpscript", "app"]
 exclude = ["vendor/unreal_asset"]
 
 [workspace.package]
