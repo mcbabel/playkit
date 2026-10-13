@@ -9,6 +9,7 @@ name = "dxgi"
 crate-type = ["cdylib"]
 
 [target.'cfg(windows)'.dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "block_encoder", "encoder", "instr_info"] }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_System_LibraryLoader",
@@ -17,4 +18,5 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_SystemServices",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Threading",
+    "Win32_Storage_FileSystem",
 ] }

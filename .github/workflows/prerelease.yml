@@ -56,6 +56,7 @@ jobs:
         run: |
           mkdir dist
           cp target/release/bundle/appimage/*.AppImage dist/Playkit-linux-x86_64.AppImage
+          (cd crates/loader && zip -qr ../../dist/playkit-mod-sdk.zip README.md sdk examples -x '*.dll')
       - uses: actions/upload-artifact@v4
         with:
           name: linux
@@ -82,6 +83,7 @@ jobs:
           printf 'Automatic build of %s: %s\n\n' "$short" "$title" > notes.md
           printf -- '- **Playkit-windows-x64.exe**: Playkit for Windows 10 and 11, no installer needed\n' >> notes.md
           printf -- '- **Playkit-linux-x86_64.AppImage**: Playkit for Linux, make it executable and start it\n' >> notes.md
-          printf -- '- **dxgi.dll**: the loose file loader on its own, for any Unreal Engine 4 game\n' >> notes.md
+          printf -- '- **dxgi.dll**: the loose file and native mod loader on its own, for any Unreal Engine 4 game\n' >> notes.md
+          printf -- '- **playkit-mod-sdk.zip**: headers and an example for writing native C++ mods\n' >> notes.md
           gh release create "build-$RUN" dist/* --repo "$REPO" --target "$SHA" --prerelease \
             --title "Build $RUN ($short)" --notes-file notes.md

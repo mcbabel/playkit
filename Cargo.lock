@@ -1864,6 +1864,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "iced-x86"
+version = "1.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c447cff8c7f384a7d4f741cfcff32f75f3ad02b406432e8d6c878d56b1edf6b"
+dependencies = [
+ "lazy_static",
+]
+
+[[package]]
 name = "ico"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2923,7 +2932,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "playkit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dirs 6.0.0",
  "playkit-core",
@@ -2939,7 +2948,7 @@ dependencies = [
 
 [[package]]
 name = "playkit-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes",
  "dirs 6.0.0",
@@ -2962,14 +2971,15 @@ dependencies = [
 
 [[package]]
 name = "playkit-loader"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "iced-x86",
  "windows-sys 0.59.0",
 ]
 
 [[package]]
 name = "playkit-merge"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "thiserror 2.0.21",
  "unreal_asset",
@@ -2977,7 +2987,7 @@ dependencies = [
 
 [[package]]
 name = "playkit-pack"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "playkit-core",
