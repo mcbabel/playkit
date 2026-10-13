@@ -1,0 +1,5 @@
+target/
+app/gen/
+*.playkit-tmp
+vendor/*/target/
+vendor/*/Cargo.lock

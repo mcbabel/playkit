@@ -1,0 +1,6 @@
+{
+  "build": {
+    "beforeBuildCommand": "cargo build -p playkit-loader --release",
+    "beforeDevCommand": "cargo build -p playkit-loader --release"
+  }
+}

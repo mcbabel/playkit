@@ -1,0 +1,11 @@
+[package]
+name = "playkit-pack"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+playkit-core.workspace = true
+serde_json.workspace = true
+clap = { version = "4", features = ["derive", "env"] }
+serde.workspace = true

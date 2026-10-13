@@ -1,0 +1,9 @@
+[package]
+name = "playkit-merge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+unreal_asset = { path = "../../vendor/unreal_asset" }
+thiserror.workspace = true

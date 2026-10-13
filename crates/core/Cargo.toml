@@ -1,0 +1,28 @@
+[package]
+name = "playkit-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+hex.workspace = true
+semver.workspace = true
+aes = "0.8.4"
+qbsdiff = "1.4"
+repak = { git = "https://github.com/trumank/repak", rev = "355b5f62f51959c7cc6dd5a51708646ef483065d", default-features = false, features = ["compression", "encryption"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+dirs = "6"
+toml.workspace = true
+playkit-merge = { path = "../merge" }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
+[dev-dependencies]
+tempfile = "3"
+tokio.workspace = true
