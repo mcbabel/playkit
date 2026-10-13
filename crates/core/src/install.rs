@@ -410,10 +410,16 @@ async fn install_files(
     auto: bool,
     progress: &impl Fn(usize, usize),
 ) -> Result<()> {
+    if !crate::package::valid_id(id) {
+        return Err(Error::Invalid(format!("invalid mod id {id:?}")));
+    }
     let m = index
         .get(id)
         .ok_or_else(|| Error::UnknownMod(id.into()))?
         .clone();
+    for f in &m.files {
+        crate::package::check_path(&f.path)?;
+    }
     let fresh = build(game, index, &m, progress).await?;
     let mut state = State::load(game)?;
     let previous: Vec<String> = state
@@ -506,6 +512,9 @@ pub fn uninstall(game: &Game, pak_key: &str, id: &str) -> Result<()> {
 }
 
 fn uninstall_files(game: &Game, pak_key: &str, id: &str) -> Result<()> {
+    if !crate::package::valid_id(id) {
+        return Err(Error::Invalid(format!("invalid mod id {id:?}")));
+    }
     let mut state = State::load(game)?;
     let Some(m) = state.mods.remove(id) else {
         return Err(Error::UnknownMod(id.into()));
@@ -697,5 +706,58 @@ mod tests {
         a.requires = vec!["b".into()];
         b.requires = vec!["a".into()];
         assert!(resolve(&[a, b], "a").is_err());
+    }
+
+    #[test]
+    fn hostile_mod_lists_are_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let traversal = demo_mod(
+            "../../escape",
+            &dir.path().join("a.bin"),
+            b"a",
+            "Playtime_Multiplayer/Content/A.txt",
+        );
+        assert!(index(vec![traversal]).validate().is_err());
+        let binary = demo_mod(
+            "dll",
+            &dir.path().join("b.bin"),
+            b"b",
+            "Playtime_Multiplayer/Binaries/Win64/dxgi.dll",
+        );
+        assert!(index(vec![binary]).validate().is_err());
+        let mut needs = demo_mod(
+            "needs",
+            &dir.path().join("c.bin"),
+            b"c",
+            "Playtime_Multiplayer/Content/C.txt",
+        );
+        needs.requires = vec!["../up".into()];
+        assert!(index(vec![needs]).validate().is_err());
+        let ok = demo_mod(
+            "fine",
+            &dir.path().join("d.bin"),
+            b"d",
+            "Playtime_Multiplayer/Content/D.txt",
+        );
+        assert!(index(vec![ok]).validate().is_ok());
+    }
+
+    #[tokio::test]
+    async fn install_refuses_paths_outside_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = fake_game(dir.path());
+        let idx = index(vec![demo_mod(
+            "dll",
+            &dir.path().join("p.bin"),
+            b"MZ",
+            "Playtime_Multiplayer/Binaries/Win64/dxgi.dll",
+        )]);
+        assert!(install_files(&game, &idx, "dll", false, &|_, _| {})
+            .await
+            .is_err());
+        assert!(!dir
+            .path()
+            .join("Playtime_Multiplayer/Binaries/Win64/dxgi.dll")
+            .exists());
     }
 }

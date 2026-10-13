@@ -77,6 +77,26 @@ impl ModFile {
 }
 
 impl Index {
+    pub fn validate(&self) -> Result<()> {
+        use crate::package::{check_path, valid_id, MAX_FILE};
+        let bad = |m: String| Err(crate::Error::Invalid(format!("mod list rejected: {m}")));
+        for m in &self.mods {
+            if !valid_id(&m.id) {
+                return bad(format!("invalid mod id {:?}", m.id));
+            }
+            if let Some(r) = m.requires.iter().find(|r| !valid_id(r)) {
+                return bad(format!("{}: invalid requirement {r:?}", m.id));
+            }
+            for f in &m.files {
+                check_path(&f.path)?;
+                if f.size > MAX_FILE {
+                    return bad(format!("{}: {} is too large", m.id, f.path));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn get(&self, id: &str) -> Option<&Mod> {
         self.mods.iter().find(|m| m.id == id)
     }
@@ -91,32 +111,43 @@ impl Index {
 }
 
 pub async fn fetch(url: &str) -> Result<Index> {
-    if let Some(path) = url.strip_prefix("file://") {
-        let data = std::fs::read(path).map_err(|e| crate::Error::io(path.as_ref(), e))?;
-        return Ok(serde_json::from_slice(&data)?);
-    }
-    let body = client()
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    Ok(serde_json::from_slice(&body)?)
+    let body = download_limited(url, MAX_INDEX).await?;
+    let index: Index = serde_json::from_slice(&body)?;
+    index.validate()?;
+    Ok(index)
 }
 
+const MAX_INDEX: u64 = 16 * 1024 * 1024;
+
 pub async fn download(url: &str) -> Result<Vec<u8>> {
+    download_limited(url, crate::package::MAX_FILE).await
+}
+
+pub async fn download_limited(url: &str, max: u64) -> Result<Vec<u8>> {
+    let too_big =
+        || crate::Error::Invalid(format!("{url} is larger than {} MB", max / 1024 / 1024));
     if let Some(path) = url.strip_prefix("file://") {
-        return std::fs::read(path).map_err(|e| crate::Error::io(path.as_ref(), e));
+        let p = std::path::Path::new(path);
+        let len = std::fs::metadata(p)
+            .map_err(|e| crate::Error::io(p, e))?
+            .len();
+        if len > max {
+            return Err(too_big());
+        }
+        return std::fs::read(p).map_err(|e| crate::Error::io(p, e));
     }
-    Ok(client()
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?
-        .to_vec())
+    let mut resp = client().get(url).send().await?.error_for_status()?;
+    if resp.content_length().is_some_and(|l| l > max) {
+        return Err(too_big());
+    }
+    let mut out = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        if out.len() as u64 + chunk.len() as u64 > max {
+            return Err(too_big());
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
 }
 
 fn client() -> reqwest::Client {

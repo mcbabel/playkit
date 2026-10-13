@@ -49,6 +49,9 @@ fn parse_key(hex_key: &str) -> Result<aes::Aes256> {
 
 pub fn apply_patch(base: &[u8], patch: &[u8], name: &str) -> Result<Vec<u8>> {
     let patcher = qbsdiff::Bspatch::new(patch).map_err(|_| Error::Patch(name.into()))?;
+    if patcher.hint_target_size() > crate::package::MAX_FILE {
+        return Err(Error::Patch(name.into()));
+    }
     let mut out = Vec::with_capacity(patcher.hint_target_size() as usize);
     patcher
         .apply(base, std::io::Cursor::new(&mut out))
@@ -76,5 +79,13 @@ mod tests {
         target.extend_from_slice(b"new tail");
         let p = make_patch(&base, &target);
         assert_eq!(apply_patch(&base, &p, "t").unwrap(), target);
+    }
+
+    #[test]
+    fn oversized_patch_is_rejected() {
+        let base = vec![0u8; 16];
+        let mut patch = make_patch(&base, &[1u8; 16]);
+        patch[24..32].copy_from_slice(&(u64::MAX / 2).to_le_bytes());
+        assert!(apply_patch(&base, &patch, "big").is_err());
     }
 }

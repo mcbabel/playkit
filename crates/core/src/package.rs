@@ -13,7 +13,7 @@ pub const CATEGORIES: &[&str] = &[
     "library",
     "other",
 ];
-const MAX_FILE: u64 = 50 * 1024 * 1024;
+pub const MAX_FILE: u64 = 50 * 1024 * 1024;
 const BLOCKED_EXT: &[&str] = &["exe", "dll", "bat", "cmd", "ps1", "sh", "so", "lua", "py"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,13 +70,7 @@ impl Manifest {
 
     pub fn validate(&self) -> Result<()> {
         let bad = |m: String| Err(Error::Invalid(format!("{}: {m}", self.id)));
-        let id_ok = !self.id.is_empty()
-            && self.id.len() <= 48
-            && self
-                .id
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-            && !self.id.starts_with('-');
+        let id_ok = valid_id(&self.id);
         if !id_ok {
             return bad("id must be lowercase letters, digits and dashes".into());
         }
@@ -103,6 +97,15 @@ impl Manifest {
         }
         Ok(())
     }
+}
+
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 48
+        && !id.starts_with('-')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 pub fn check_path(rel: &str) -> Result<()> {
