@@ -77,7 +77,7 @@ impl ModFile {
 }
 
 impl Index {
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self, local: bool) -> Result<()> {
         use crate::package::{check_path, valid_id, MAX_FILE};
         let bad = |m: String| Err(crate::Error::Invalid(format!("mod list rejected: {m}")));
         for m in &self.mods {
@@ -89,6 +89,12 @@ impl Index {
             }
             for f in &m.files {
                 check_path(&f.path)?;
+                if !local && !f.url.starts_with("https://") {
+                    return bad(format!(
+                        "{}: {} must be downloaded over https",
+                        m.id, f.path
+                    ));
+                }
                 if f.size > MAX_FILE {
                     return bad(format!("{}: {} is too large", m.id, f.path));
                 }
@@ -113,7 +119,7 @@ impl Index {
 pub async fn fetch(url: &str) -> Result<Index> {
     let body = download_limited(url, MAX_INDEX).await?;
     let index: Index = serde_json::from_slice(&body)?;
-    index.validate()?;
+    index.validate(url.starts_with("file://"))?;
     Ok(index)
 }
 

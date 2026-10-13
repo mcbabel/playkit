@@ -49,14 +49,40 @@ fn parse_key(hex_key: &str) -> Result<aes::Aes256> {
 
 pub fn apply_patch(base: &[u8], patch: &[u8], name: &str) -> Result<Vec<u8>> {
     let patcher = qbsdiff::Bspatch::new(patch).map_err(|_| Error::Patch(name.into()))?;
-    if patcher.hint_target_size() > crate::package::MAX_FILE {
+    let expected = patcher.hint_target_size();
+    if expected > crate::package::MAX_FILE {
         return Err(Error::Patch(name.into()));
     }
-    let mut out = Vec::with_capacity(patcher.hint_target_size() as usize);
+    let mut out = Limited {
+        data: Vec::with_capacity(expected as usize),
+        max: expected as usize,
+    };
     patcher
-        .apply(base, std::io::Cursor::new(&mut out))
+        .apply(base, &mut out)
         .map_err(|_| Error::Patch(name.into()))?;
-    Ok(out)
+    if out.data.len() as u64 != expected {
+        return Err(Error::Patch(name.into()));
+    }
+    Ok(out.data)
+}
+
+struct Limited {
+    data: Vec<u8>,
+    max: usize,
+}
+
+impl std::io::Write for Limited {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.data.len() + buf.len() > self.max {
+            return Err(std::io::Error::other("patch output too large"));
+        }
+        self.data.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 pub fn make_patch(base: &[u8], target: &[u8]) -> Vec<u8> {

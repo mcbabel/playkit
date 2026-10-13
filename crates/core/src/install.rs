@@ -717,14 +717,14 @@ mod tests {
             b"a",
             "Playtime_Multiplayer/Content/A.txt",
         );
-        assert!(index(vec![traversal]).validate().is_err());
+        assert!(index(vec![traversal]).validate(true).is_err());
         let binary = demo_mod(
             "dll",
             &dir.path().join("b.bin"),
             b"b",
             "Playtime_Multiplayer/Binaries/Win64/dxgi.dll",
         );
-        assert!(index(vec![binary]).validate().is_err());
+        assert!(index(vec![binary]).validate(true).is_err());
         let mut needs = demo_mod(
             "needs",
             &dir.path().join("c.bin"),
@@ -732,14 +732,15 @@ mod tests {
             "Playtime_Multiplayer/Content/C.txt",
         );
         needs.requires = vec!["../up".into()];
-        assert!(index(vec![needs]).validate().is_err());
+        assert!(index(vec![needs]).validate(true).is_err());
         let ok = demo_mod(
             "fine",
             &dir.path().join("d.bin"),
             b"d",
             "Playtime_Multiplayer/Content/D.txt",
         );
-        assert!(index(vec![ok]).validate().is_ok());
+        assert!(index(vec![ok.clone()]).validate(true).is_ok());
+        assert!(index(vec![ok]).validate(false).is_err());
     }
 
     #[tokio::test]
