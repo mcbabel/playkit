@@ -13,6 +13,7 @@ fn main() {
             commands::mods,
             commands::install,
             commands::uninstall,
+            commands::set_enabled,
             commands::update_all,
             commands::setup,
             commands::remove_loader,

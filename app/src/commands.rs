@@ -135,6 +135,7 @@ pub struct ModView {
     needs: Vec<String>,
     needed_by: Vec<String>,
     auto: bool,
+    disabled: bool,
 }
 
 #[derive(Serialize)]
@@ -207,6 +208,7 @@ pub async fn mods(state: Tauri<'_, AppState>, refresh: bool) -> Res<ModList> {
                     .map(|o| o.name.clone())
                     .collect(),
                 auto: mine.is_some_and(|i| i.auto),
+                disabled: mine.is_some_and(|i| i.disabled),
                 info: m.clone(),
             }
         })
@@ -256,6 +258,17 @@ pub async fn uninstall(state: Tauri<'_, AppState>, id: String) -> Res<()> {
         .map(|i| i.game.pak_key)
         .unwrap_or_default();
     install::uninstall(&state.game()?, &key, &id).map_err(err)
+}
+
+#[tauri::command]
+pub async fn set_enabled(state: Tauri<'_, AppState>, id: String, enabled: bool) -> Res<()> {
+    let _busy = state.busy.lock().await;
+    let key = state
+        .index(false)
+        .await
+        .map(|i| i.game.pak_key)
+        .unwrap_or_default();
+    install::set_enabled(&state.game()?, &key, &id, enabled).map_err(err)
 }
 
 #[tauri::command]

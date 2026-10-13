@@ -27,6 +27,8 @@ pub struct Installed {
     pub requires: Vec<String>,
     #[serde(default)]
     pub auto: bool,
+    #[serde(default)]
+    pub disabled: bool,
     pub files: Vec<InstalledFile>,
 }
 
@@ -82,14 +84,16 @@ impl State {
         self.mods
             .iter()
             .filter(|(other, m)| {
-                *other != id && m.files.iter().any(|f| stems.contains(&stem(&f.path)))
+                *other != id
+                    && !m.disabled
+                    && m.files.iter().any(|f| stems.contains(&stem(&f.path)))
             })
             .map(|(other, _)| other.clone())
             .collect()
     }
 
     pub fn health(&self, game: &Game, id: &str) -> Health {
-        let Some(m) = self.mods.get(id) else {
+        let Some(m) = self.mods.get(id).filter(|m| !m.disabled) else {
             return Health::Ok;
         };
         let changed: Vec<String> = m
@@ -116,7 +120,7 @@ impl State {
         let mut v: Vec<_> = self
             .mods
             .iter()
-            .filter(|(_, m)| m.files.iter().any(|f| stem(&f.path) == stem_key))
+            .filter(|(_, m)| !m.disabled && m.files.iter().any(|f| stem(&f.path) == stem_key))
             .collect();
         v.sort_by_key(|(_, m)| m.seq);
         v
@@ -385,6 +389,7 @@ pub async fn adopt(game: &Game, index: &Index) -> Result<Vec<String>> {
                 seq: state.next_seq,
                 requires: m.requires.clone(),
                 auto: false,
+                disabled: false,
                 files: m
                     .files
                     .iter()
@@ -500,7 +505,11 @@ pub async fn install(
             install_files(game, index, dep, true, &progress).await?;
         }
     }
-    install_files(game, index, id, false, &progress).await
+    install_files(game, index, id, false, &progress).await?;
+    if State::load(game)?.mods.get(id).is_some_and(|i| !i.disabled) {
+        set_enabled(game, &index.game.pak_key, id, true)?;
+    }
+    Ok(())
 }
 
 pub fn resolve(mods: &[Mod], id: &str) -> Result<Vec<String>> {
@@ -563,6 +572,7 @@ async fn install_files(
         }
     };
     let auto = state.mods.get(id).map_or(auto, |i| i.auto && auto);
+    let disabled = state.mods.get(id).is_some_and(|i| i.disabled);
     let mut after = state.clone();
     after.mods.insert(
         id.to_string(),
@@ -572,6 +582,7 @@ async fn install_files(
             seq,
             requires: m.requires.clone(),
             auto,
+            disabled,
             files: m
                 .files
                 .iter()
@@ -637,6 +648,83 @@ pub fn uninstall(game: &Game, pak_key: &str, id: &str) -> Result<()> {
             None => return Ok(()),
         }
     }
+}
+
+pub fn set_enabled(game: &Game, pak_key: &str, id: &str, enabled: bool) -> Result<()> {
+    ensure_idle(game)?;
+    if !crate::package::valid_id(id) {
+        return Err(Error::Invalid(format!("invalid mod id {id:?}")));
+    }
+    let mut state = State::load(game)?;
+    let name = state
+        .mods
+        .get(id)
+        .ok_or_else(|| Error::UnknownMod(id.into()))?
+        .name
+        .clone();
+    let mut change: BTreeSet<String> = BTreeSet::new();
+    if enabled {
+        let mut stack = vec![id.to_string()];
+        while let Some(x) = stack.pop() {
+            let m = state.mods.get(&x).ok_or_else(|| {
+                Error::Invalid(format!("{name} needs {x}, which is not installed"))
+            })?;
+            if m.disabled && change.insert(x) {
+                stack.extend(m.requires.iter().cloned());
+            }
+        }
+    } else {
+        let needed_by: Vec<String> = state
+            .mods
+            .iter()
+            .filter(|(other, m)| *other != id && !m.disabled && m.requires.iter().any(|r| r == id))
+            .map(|(_, m)| m.name.clone())
+            .collect();
+        if !needed_by.is_empty() {
+            return Err(Error::Invalid(format!(
+                "{name} is needed by {}",
+                needed_by.join(", ")
+            )));
+        }
+        if !state.mods[id].disabled {
+            change.insert(id.to_string());
+        }
+        loop {
+            let active = |x: &String, m: &Installed| !m.disabled && !change.contains(x);
+            let orphan = state.mods.iter().find(|(dep, m)| {
+                m.auto
+                    && active(dep, m)
+                    && !state
+                        .mods
+                        .iter()
+                        .any(|(o, om)| active(o, om) && om.requires.iter().any(|r| r == *dep))
+            });
+            match orphan {
+                Some((dep, _)) => change.insert(dep.clone()),
+                None => break,
+            };
+        }
+    }
+    if change.is_empty() {
+        return Ok(());
+    }
+    let mut stems = BTreeSet::new();
+    for x in &change {
+        let m = state.mods.get_mut(x).expect("listed above");
+        m.disabled = !enabled;
+        stems.extend(m.files.iter().map(|f| stem(&f.path)));
+    }
+    let empty = HashMap::new();
+    let mut src = Sources {
+        game,
+        fresh: &empty,
+        fresh_id: "",
+        pak: None,
+        pak_key,
+    };
+    let actions = plan(&state, &stems, &mut src)?;
+    state.save(game)?;
+    execute(game, &mut state, actions)
 }
 
 fn uninstall_files(game: &Game, pak_key: &str, id: &str) -> Result<()> {
@@ -814,6 +902,46 @@ mod tests {
             .path()
             .join("Playtime_Multiplayer/Content/Lib.txt")
             .exists());
+    }
+
+    #[tokio::test]
+    async fn disable_removes_files_and_enable_brings_them_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = fake_game(dir.path());
+        let rel = "Playtime_Multiplayer/Content/Interface/UI_Test.txt";
+        let target = dir.path().join(rel);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, b"users own loose mod").unwrap();
+        let mut lib = demo_mod(
+            "lib",
+            &dir.path().join("l.bin"),
+            b"lib",
+            "Playtime_Multiplayer/Content/Lib.txt",
+        );
+        lib.category = "library".into();
+        let mut app = demo_mod("app", &dir.path().join("a.bin"), b"modded", rel);
+        app.requires = vec!["lib".into()];
+        let idx = index(vec![lib, app]);
+        install(&game, &idx, "app", |_, _| {}).await.unwrap();
+        let lib_file = dir.path().join("Playtime_Multiplayer/Content/Lib.txt");
+
+        assert!(set_enabled(&game, "", "lib", false).is_err());
+        set_enabled(&game, "", "app", false).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"users own loose mod");
+        assert!(!lib_file.exists());
+        let state = State::load(&game).unwrap();
+        assert!(state.mods["app"].disabled && state.mods["lib"].disabled);
+        assert!(matches!(state.health(&game, "app"), Health::Ok));
+
+        set_enabled(&game, "", "app", true).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"modded");
+        assert!(lib_file.exists());
+        assert!(!State::load(&game).unwrap().mods["lib"].disabled);
+
+        set_enabled(&game, "", "app", false).unwrap();
+        uninstall(&game, "", "app").unwrap();
+        assert!(State::load(&game).unwrap().mods.is_empty());
+        assert_eq!(std::fs::read(&target).unwrap(), b"users own loose mod");
     }
 
     #[test]

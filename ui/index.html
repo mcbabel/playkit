@@ -8,6 +8,15 @@
 <script src="app.js" defer></script>
 </head>
 <body>
+<header class="titlebar" data-tauri-drag-region>
+  <span class="titlebar-name" data-tauri-drag-region>Playkit</span>
+  <div class="wincontrols">
+    <button class="winbtn" id="win-min" aria-label="Minimize"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M1.5 6h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+    <button class="winbtn" id="win-max" aria-label="Maximize"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1.8" y="1.8" width="8.4" height="8.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
+    <button class="winbtn winbtn-close" id="win-close" aria-label="Close"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+  </div>
+</header>
+<div class="shell">
 <aside class="sidebar">
   <div class="brand">
     <div class="brand-mark">
@@ -22,6 +31,7 @@
   <div class="game-card" id="game-card"></div>
 </aside>
 <main id="view" tabindex="-1"></main>
+</div>
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 </body>
 </html>

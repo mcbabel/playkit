@@ -165,6 +165,15 @@ function uninstallMod(m) {
   });
 }
 
+function toggleMod(m, enabled) {
+  return run(m.id, enabled ? "Enabling" : "Disabling", async () => {
+    await invoke("set_enabled", { id: m.id, enabled });
+    toast(`${m.name} ${enabled ? "enabled" : "disabled"}`, "ok");
+  });
+}
+
+const neededByActive = (m) => app.mods.filter((o) => o.installed && !o.disabled && o.needs.includes(m.name)).map((o) => o.name);
+
 function updateAll() {
   return run("*", "Updating", async () => {
     const done = await invoke("update_all");
@@ -234,6 +243,7 @@ function actionButton(m, compact) {
   if (!m.compatible) return el("button", { class: "btn btn-ghost", disabled: true, text: "Other game version" });
   if (m.update) return el("button", { class: "btn btn-blue", disabled: blocked, onclick: () => installMod(m), text: compact ? "Update" : `Update to ${m.version}` });
   if (m.installed) {
+    if (m.disabled) return el("button", { class: "btn btn-accent", disabled: blocked, onclick: () => toggleMod(m, true), text: "Enable" });
     if (m.broken.length) return el("button", { class: "btn btn-accent", disabled: blocked, onclick: () => installMod(m), text: "Repair" });
     return compact
       ? el("button", { class: "btn btn-ghost", onclick: () => go("detail", m.id) }, icon("check", 16), "Installed")
@@ -245,8 +255,8 @@ function actionButton(m, compact) {
 function modCard(m) {
   return el(
     "article",
-    { class: "card" },
-    el("div", { class: "card-top", vars: { "--tint": tint(m) } }, el("div", { class: "mono", text: monogram(m.name) }), el("span", { class: "ver", text: `v${m.installed || m.version}` })),
+    { class: m.disabled ? "card off" : "card" },
+    el("div", { class: "card-top", vars: { "--tint": tint(m) } }, el("div", { class: "mono", text: monogram(m.name) }), el("span", { class: "ver", text: m.disabled ? "off" : `v${m.installed || m.version}` })),
     el(
       "div",
       { class: "card-body" },
@@ -360,7 +370,7 @@ function renderDetail() {
     offline: ["Offline only.", " Only used in tutorials or solo play."],
   }[m.network];
   const buildName = app.status?.game?.build_name || app.status?.game?.build_id || "your game";
-  const subtitle = [`by ${m.authors.join(", ")}`, m.installed ? `installed ${m.installed}` : null, `latest ${m.version}`].filter(Boolean).join(" · ");
+  const subtitle = [`by ${m.authors.join(", ")}`, m.installed ? `installed ${m.installed}${m.disabled ? ", disabled" : ""}` : null, `latest ${m.version}`].filter(Boolean).join(" · ");
   return [
     el("button", { class: "back", onclick: () => go("browse") }, icon("back", 18), "All mods"),
     el(
@@ -372,6 +382,7 @@ function renderDetail() {
         "div",
         { class: "actions" },
         actionButton(m, false),
+        m.installed && !m.disabled ? el("button", { class: "btn btn-ghost", disabled: app.busy.has(m.id) || app.status?.game_running || neededByActive(m).length > 0, title: neededByActive(m).length ? `Needed by ${neededByActive(m).join(", ")}` : "Turn it off without removing it", onclick: () => toggleMod(m, false), text: "Disable" }) : null,
         m.installed ? el("button", { class: "btn btn-ghost", disabled: app.busy.has(m.id) || app.status?.game_running || m.needed_by.length > 0, title: m.needed_by.length ? `Needed by ${m.needed_by.join(", ")}` : null, onclick: () => uninstallMod(m), text: "Uninstall" }) : null
       )
     ),
@@ -386,7 +397,7 @@ function renderDetail() {
         m.broken.length ? el("div", { class: "panel" }, el("h2", { class: "warn", text: "Changed outside Playkit" }), el("p", { class: "prose", text: "These files no longer match. Press Repair to install them again." }), el("div", { class: "code", text: m.broken.join("\n") })) : null,
         el("h2", { text: "Files it changes" }),
         el("div", { class: "code", text: m.files.map((f) => f.path.replace(/^Playtime_Multiplayer\//, "")).join("\n") }),
-        el("span", { class: "hint", text: "Originals are backed up before anything is replaced, and restored when you uninstall." })
+        el("span", { class: "hint", text: "Originals are backed up before anything is replaced, and restored when you disable or uninstall." })
       ),
       el(
         "aside",
@@ -622,7 +633,26 @@ function render() {
   view.replaceChildren(...content.flat().filter(Boolean));
 }
 
+const MAX_ICON = '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1.8" y="1.8" width="8.4" height="8.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>';
+const RESTORE_ICON = '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1.4" y="3.6" width="7" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M3.8 1.6h5a1.6 1.6 0 0 1 1.6 1.6v5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+
+function windowControls() {
+  const win = tauri.window.getCurrentWindow();
+  const max = document.getElementById("win-max");
+  const sync = async () => {
+    const maximized = await win.isMaximized();
+    max.innerHTML = maximized ? RESTORE_ICON : MAX_ICON;
+    max.setAttribute("aria-label", maximized ? "Restore" : "Maximize");
+  };
+  document.getElementById("win-min").onclick = () => win.minimize();
+  max.onclick = () => win.toggleMaximize();
+  document.getElementById("win-close").onclick = () => win.close();
+  win.onResized(sync);
+  sync();
+}
+
 async function start() {
+  windowControls();
   tauri.event.listen("progress", (e) => {
     const { id, done, total } = e.payload;
     if (app.busy.has(id)) {
