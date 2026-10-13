@@ -461,7 +461,7 @@ function renderSetup() {
     missing: "Not installed yet.",
     current: "Installed and up to date.",
     outdated: "An older Playkit loader is installed. Patch the game to update it.",
-    foreign: "Another loose-file loader is installed. It works, but Playkit can replace it with its own. The old one is kept as a backup.",
+    foreign: "Another loose-file loader is installed and works. Patch game replaces it with the Playkit loader and keeps the old one as a backup.",
   }[dll] || "";
   const launch = !linux
     ? null
@@ -494,7 +494,7 @@ function renderSetup() {
           ? [el("div", { class: "inline" }, el("span", { class: "path", text: game.root }), el("button", { class: "btn btn-ghost", onclick: chooseGameDir, text: "Change" }), game.custom_dir ? el("button", { class: "btn btn-ghost", onclick: async () => { await invoke("set_game_dir", { path: null }); reload(false); }, text: "Auto-detect" }) : null), el("span", { class: "hint", text: `Build ${game.build_name || game.build_id || "unknown"}` })]
           : [el("p", { text: s.game_error || "Project Playtime was not found." }), el("button", { class: "btn btn-accent", onclick: chooseGameDir }, icon("folder", 18, "#1A1405"), "Choose folder")]
       ),
-      step(2, dll === "current" ? "done" : game ? "todo" : "", "Mod loader", el("p", { text: "A small loader next to the game lets it read mod files from its Content folder." }), dll ? el("p", { class: dll === "current" ? "good" : "warn", text: dllText }) : null),
+      step(2, dll === "current" || dll === "foreign" ? "done" : game ? "todo" : "", "Mod loader", el("p", { text: "A small loader next to the game lets it read mod files from its Content folder." }), dll ? el("p", { class: dll === "current" ? "good" : dll === "foreign" ? "info" : "warn", text: dllText }) : null),
       launch
     ),
     el(

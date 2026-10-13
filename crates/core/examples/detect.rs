@@ -8,14 +8,7 @@ fn main() {
     println!("steam: {:?}", g.steam);
     println!(
         "loader: {:?}",
-        loader::status(
-            &g,
-            &p,
-            &loader::Bundled {
-                bytes: b"",
-                known_old: &[]
-            }
-        )
+        loader::status(&g, &p, &loader::Bundled { bytes: b"" })
     );
     println!("game running (this folder): {}", g.is_running());
     if let Some(key) = std::env::args().nth(1) {

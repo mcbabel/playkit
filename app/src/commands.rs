@@ -16,10 +16,7 @@ const LOADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dxgi.dll"));
 const REGISTRY: &str = "https://github.com/MCbabel/playkit-mods";
 
 fn bundled() -> Bundled<'static> {
-    Bundled {
-        bytes: LOADER,
-        known_old: &[],
-    }
+    Bundled { bytes: LOADER }
 }
 
 type Res<T> = Result<T, String>;

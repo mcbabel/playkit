@@ -42,16 +42,30 @@ impl Status {
 
 pub struct Bundled<'a> {
     pub bytes: &'a [u8],
-    pub known_old: &'a [&'a str],
+}
+
+const MARKER: &[u8] = b"playkit loader ";
+
+pub fn loader_version(dll: &[u8]) -> Option<semver::Version> {
+    let start = dll.windows(MARKER.len()).position(|w| w == MARKER)? + MARKER.len();
+    let rest = &dll[start..dll.len().min(start + 32)];
+    let end = rest
+        .iter()
+        .position(|c| !(c.is_ascii_alphanumeric() || *c == b'.' || *c == b'-'))
+        .unwrap_or(rest.len());
+    semver::Version::parse(std::str::from_utf8(&rest[..end]).ok()?).ok()
 }
 
 pub fn status(game: &Game, platform: &Platform, bundled: &Bundled) -> Status {
     let path = game.binaries().join(DLL);
-    let dll = match fsx::sha256_file(&path) {
+    let ours = loader_version(bundled.bytes);
+    let dll = match std::fs::read(&path) {
         Err(_) => DllState::Missing,
-        Ok(h) if h == fsx::sha256(bundled.bytes) => DllState::Current,
-        Ok(h) if bundled.known_old.contains(&h.as_str()) => DllState::Outdated,
-        Ok(_) => DllState::Foreign,
+        Ok(d) => match (loader_version(&d), &ours) {
+            (Some(v), Some(o)) if v < *o => DllState::Outdated,
+            (Some(_), _) => DllState::Current,
+            (None, _) => DllState::Foreign,
+        },
     };
     Status {
         dll,
@@ -88,13 +102,12 @@ pub fn install_dll(game: &Game, bundled: &Bundled) -> Result<()> {
         return Err(Error::GameRunning);
     }
     let path = game.binaries().join(DLL);
-    let ours = fsx::sha256(bundled.bytes);
-    if let Ok(h) = fsx::sha256_file(&path) {
-        if h == ours {
-            return Ok(());
-        }
-        if !bundled.known_old.contains(&h.as_str()) && !backup(game).exists() {
-            fsx::copy_into(&path, &backup(game))?;
+    if let Ok(current) = std::fs::read(&path) {
+        match (loader_version(&current), loader_version(bundled.bytes)) {
+            (Some(v), Some(o)) if v >= o => return Ok(()),
+            (Some(_), _) => {}
+            (None, _) if !backup(game).exists() => fsx::copy_into(&path, &backup(game))?,
+            (None, _) => {}
         }
     }
     fsx::write_atomic(&path, bundled.bytes)
@@ -187,6 +200,18 @@ pub fn merge_launch_options(cur: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognises_any_build_of_the_loader() {
+        let mut dll = b"MZ\0\0 some code playkit loader 0.2.1\n more".to_vec();
+        assert_eq!(loader_version(&dll), Some(semver::Version::new(0, 2, 1)));
+        dll.truncate(10);
+        assert_eq!(loader_version(&dll), None);
+        assert_eq!(
+            loader_version(b"playkit loader 1.0.0"),
+            Some(semver::Version::new(1, 0, 0))
+        );
+    }
 
     #[test]
     fn detects_existing_override() {
