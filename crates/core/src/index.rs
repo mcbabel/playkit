@@ -70,6 +70,14 @@ pub struct ModFile {
     pub base_sha256: Option<String>,
 }
 
+impl Mod {
+    /// Whether the mod brings its own program code (a DLL for the Playkit loader).
+    pub fn is_native(&self) -> bool {
+        let dll = crate::package::native_path(&self.id);
+        self.files.iter().any(|f| f.path == dll)
+    }
+}
+
 impl ModFile {
     pub fn is_patch(&self) -> bool {
         self.base_sha256.is_some()
@@ -78,7 +86,7 @@ impl ModFile {
 
 impl Index {
     pub fn validate(&self, local: bool) -> Result<()> {
-        use crate::package::{check_path, valid_id, MAX_FILE};
+        use crate::package::{check_mod_path, valid_id, MAX_FILE};
         let bad = |m: String| Err(crate::Error::Invalid(format!("mod list rejected: {m}")));
         for m in &self.mods {
             if !valid_id(&m.id) {
@@ -88,7 +96,7 @@ impl Index {
                 return bad(format!("{}: invalid requirement {r:?}", m.id));
             }
             for f in &m.files {
-                check_path(&f.path)?;
+                check_mod_path(&f.path, &m.id)?;
                 if !local && !f.url.starts_with("https://") {
                     return bad(format!(
                         "{}: {} must be downloaded over https",

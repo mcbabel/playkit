@@ -14,6 +14,7 @@ const app = {
   listError: null,
   busy: new Map(),
   packResult: null,
+  confirmNative: null,
 };
 
 const NET = {
@@ -152,6 +153,7 @@ async function run(id, label, fn) {
 }
 
 function installMod(m) {
+  app.confirmNative = null;
   return run(m.id, m.installed ? "Updating" : "Installing", async () => {
     await invoke("install", { id: m.id });
     toast(`${m.name} ${m.installed ? "updated" : "installed"}`, "ok");
@@ -236,6 +238,10 @@ function netBadge(network) {
   return el("span", { class: `net ${n.cls}` }, el("span", { class: "dot" }), n.label);
 }
 
+function nativeBadge(m) {
+  return m.native ? el("span", { class: "net info", title: "Runs its own program code through the Playkit loader" }, el("span", { class: "dot" }), "Native code") : null;
+}
+
 function actionButton(m, compact) {
   const busy = app.busy.get(m.id) || (app.busy.has("*") && m.update ? "Updating" : null);
   if (busy) return el("button", { class: "btn btn-ghost", disabled: true, text: `${busy}…` });
@@ -249,6 +255,10 @@ function actionButton(m, compact) {
       ? el("button", { class: "btn btn-ghost", onclick: () => go("detail", m.id) }, icon("check", 16), "Installed")
       : null;
   }
+  if (m.native && app.confirmNative !== m.id) {
+    return el("button", { class: "btn btn-accent", disabled: blocked, title: "Runs its own program code inside the game", onclick: () => { app.confirmNative = m.id; render(); }, text: "Install" });
+  }
+  if (m.native) return el("button", { class: "btn btn-blue", disabled: blocked, title: "This mod runs its own program code inside the game. Its source code was reviewed before it was listed.", onclick: () => installMod(m), text: compact ? "Confirm" : "Install native code" });
   return el("button", { class: "btn btn-accent", disabled: blocked, onclick: () => installMod(m), text: "Install" });
 }
 
@@ -263,6 +273,7 @@ function modCard(m) {
       el("button", { class: "card-title", onclick: () => go("detail", m.id), text: m.name }),
       el("span", { class: "card-sum", text: m.summary }),
       netBadge(m.network),
+      nativeBadge(m),
       el("div", { class: "card-foot" }, el("span", { class: "by", text: `by ${m.authors.join(", ")}` }), actionButton(m, true))
     )
   );
@@ -413,6 +424,14 @@ function renderDetail() {
             el("span", { class: `check-icon ${m.compatible ? "good" : "bad"}` }, icon(m.compatible ? "check" : "warn", 16)),
             el("span", {}, el("b", { text: m.compatible ? `Game build ${buildName}` : "Made for another game version." }), m.compatible ? " matches." : " Wait for an update from the author.")
           ),
+          m.native
+            ? el(
+                "div",
+                { class: "check" },
+                el("span", { class: "check-icon warn" }, icon("warn", 16)),
+                el("span", {}, el("b", { text: "Runs its own code." }), " A native mod for the Playkit loader. Its source code was reviewed before it was listed. ", m.source_url ? el("a", { href: "#", onclick: (e) => { e.preventDefault(); invoke("open_url", { url: m.source_url }); }, text: "Read the source" }) : null)
+              )
+            : null,
           m.needs.length
             ? el("div", { class: "check" }, el("span", { class: "check-icon info" }, icon("box", 16)), el("span", {}, el("b", { text: `Also installs ${m.needs.join(", ")}` }), ". Shared parts other mods use too. Removed again when nothing needs them."))
             : null,
@@ -586,13 +605,13 @@ function renderSubmit() {
   const r = app.packResult;
   const checks = [
     ["Manifest is valid", "Name, version and game build are filled in."],
-    ["Only game content", "Files stay inside the Content folder. Programs and scripts are not accepted."],
+    ["Only game content", "Changed files inside the Content folder, Blueprint patches (.bps), or one native mod DLL with its source code."],
     ["Patches, not game files", "Playkit stores only the difference to the original game files, so no game content is uploaded."],
     ["Reviewed by a maintainer", "Including the network badge: safe for public matches, or lobby members need it."],
   ];
   return [
     el("header", { class: "page-head" }, el("h1", { text: "Share your mod" })),
-    el("p", { class: "lede", text: "Put a mod.toml next to a Playtime_Multiplayer folder that holds your changed files, exactly where they would go in the game. Playkit turns it into small patches you can send in." }),
+    el("p", { class: "lede", text: "Put a mod.toml next to a Playtime_Multiplayer folder that holds your changed files, exactly where they would go in the game. A .bps file next to an asset (UI_Foo.bps for UI_Foo.uasset) is applied to the original as a Blueprint patch. Playkit turns it all into small patches you can send in." }),
     el(
       "div",
       { class: "split" },
@@ -614,6 +633,7 @@ function renderSubmit() {
               el("h2", { text: `${r.id} is packed` }),
               el("div", { class: "code", text: r.files.map((f) => `${f.base_sha256 ? "patch" : "file "}  ${f.path}`).join("\n") }),
               r.unchanged.length ? el("span", { class: "hint", text: `${r.unchanged.length} unchanged file(s) left out.` }) : null,
+              r.sources.length ? el("span", { class: "hint", text: `Source included for review: ${r.sources.join(", ")}` }) : null,
               el(
                 "div",
                 { class: "inline" },

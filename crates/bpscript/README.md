@@ -127,6 +127,8 @@ statements in the game's assets need an annotation.
 
 ## Patch files
 
+A patch file can be published as a mod on its own: put it in the mod folder where the asset would be, with `.bps` instead of `.uasset`, and pack it with Playkit. See [Blueprint patches in the mod list guide](https://github.com/MCbabel/playkit-mods/blob/main/CONTRIBUTING.md#blueprint-patches-bps).
+
 ```
 import '/Script/Engine.KismetSystemLibrary:PrintString';
 

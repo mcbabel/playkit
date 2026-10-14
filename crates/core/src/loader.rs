@@ -100,6 +100,18 @@ pub fn loader_version(dll: &[u8]) -> Option<semver::Version> {
     semver::Version::parse(std::str::from_utf8(&rest[..end]).ok()?).ok()
 }
 
+/// First loader version that runs native mods from `playkit-mods`.
+pub const NATIVE_SINCE: &str = "0.3.0";
+
+/// Whether the installed loader runs native mods.
+pub fn supports_native(game: &Game) -> bool {
+    let min = semver::Version::parse(NATIVE_SINCE).expect("valid version");
+    std::fs::read(game.binaries().join(DLL))
+        .ok()
+        .and_then(|d| loader_version(&d))
+        .is_some_and(|v| v >= min)
+}
+
 pub fn status(game: &Game, platform: &Platform, bundled: &Bundled) -> Status {
     let path = game.binaries().join(DLL);
     let ours = loader_version(bundled.bytes);

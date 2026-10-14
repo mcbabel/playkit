@@ -21,6 +21,10 @@ enum Cmd {
         game: Option<PathBuf>,
         #[arg(long, env = "PLAYKIT_PAK_KEY")]
         key: Option<String>,
+        /// Reflection database for short names in .bps patches
+        /// (default: playkit-sdk/reflection.json in the game, written by the loader)
+        #[arg(long, env = "PLAYKIT_REFLECTION")]
+        reflection: Option<PathBuf>,
     },
     /// Validate every mod and write index.json
     Index {
@@ -39,6 +43,7 @@ fn run() -> Result<(), String> {
             repo,
             game,
             key,
+            reflection,
         } => {
             let game = match game {
                 Some(dir) => Game::from_dir(&dir),
@@ -54,7 +59,9 @@ fn run() -> Result<(), String> {
                     reg.game.pak_key
                 }
             };
-            let r = package::pack(&src, &game.pak(), &key, &repo).map_err(|e| e.to_string())?;
+            let reflection = reflection.unwrap_or_else(|| game.reflection());
+            let r = package::pack(&src, &game.pak(), &key, &repo, Some(&reflection))
+                .map_err(|e| e.to_string())?;
             for f in &r.files {
                 let kind = if f.base_sha256.is_some() {
                     "patch"
@@ -62,6 +69,9 @@ fn run() -> Result<(), String> {
                     "file "
                 };
                 println!("{kind} {} ({} bytes)", f.path, f.size);
+            }
+            for s in &r.sources {
+                println!("source {s}");
             }
             for s in &r.skipped_unchanged {
                 println!("same  {s} (unchanged, left out)");

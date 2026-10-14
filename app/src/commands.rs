@@ -136,6 +136,8 @@ pub struct ModView {
     needed_by: Vec<String>,
     auto: bool,
     disabled: bool,
+    native: bool,
+    source_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -190,7 +192,10 @@ pub async fn mods(state: Tauri<'_, AppState>, refresh: bool) -> Res<ModList> {
                         .map_or(other.clone(), |o| o.name.clone())
                 })
                 .collect();
+            let native = m.is_native();
             ModView {
+                native,
+                source_url: native.then(|| format!("{REGISTRY}/tree/main/mods/{}/source", m.id)),
                 installed: mine.map(|i| i.version.clone()),
                 update: mine.is_some_and(|i| index::version_newer(&m.version, &i.version)),
                 compatible: build.as_ref().is_none_or(|b| m.game_builds.contains(b)),
@@ -363,6 +368,7 @@ pub struct PackResult {
     id: String,
     files: Vec<package::PackedFile>,
     unchanged: Vec<String>,
+    sources: Vec<String>,
     zip: PathBuf,
     manifest: String,
     pull_request_url: String,
@@ -378,7 +384,14 @@ pub async fn pack(state: Tauri<'_, AppState>, src: PathBuf) -> Res<PackResult> {
         .map_err(|_| "mod.toml is missing in that folder".to_string())?;
     let staging = work.join("staging");
     let _ = std::fs::remove_dir_all(&staging);
-    let report = package::pack(&src, &game.pak(), &idx.game.pak_key, &staging).map_err(err)?;
+    let report = package::pack(
+        &src,
+        &game.pak(),
+        &idx.game.pak_key,
+        &staging,
+        Some(&game.reflection()),
+    )
+    .map_err(err)?;
     let zip = work.join(format!("{}.zip", report.id));
     zip_dir(&report.out, &zip, &format!("mods/{}", report.id))?;
     Ok(PackResult {
@@ -390,6 +403,7 @@ pub async fn pack(state: Tauri<'_, AppState>, src: PathBuf) -> Res<PackResult> {
         id: report.id,
         files: report.files,
         unchanged: report.skipped_unchanged,
+        sources: report.sources,
         zip,
         manifest,
     })

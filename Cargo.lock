@@ -391,7 +391,7 @@ dependencies = [
 
 [[package]]
 name = "bpscript"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "ordered-float",
  "playkit-merge",
@@ -2943,7 +2943,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "playkit"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "dirs 6.0.0",
  "playkit-core",
@@ -2959,12 +2959,14 @@ dependencies = [
 
 [[package]]
 name = "playkit-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "aes",
+ "bpscript",
  "dirs 6.0.0",
  "hex",
  "playkit-merge",
+ "playkit-reflect",
  "qbsdiff",
  "repak",
  "reqwest 0.12.28",
@@ -2982,7 +2984,7 @@ dependencies = [
 
 [[package]]
 name = "playkit-loader"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "iced-x86",
  "playkit-reflect",
@@ -2991,7 +2993,7 @@ dependencies = [
 
 [[package]]
 name = "playkit-merge"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "thiserror 2.0.21",
  "unreal_asset",
@@ -2999,7 +3001,7 @@ dependencies = [
 
 [[package]]
 name = "playkit-pack"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "clap",
  "playkit-core",
@@ -3009,7 +3011,7 @@ dependencies = [
 
 [[package]]
 name = "playkit-reflect"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",

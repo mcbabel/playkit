@@ -65,6 +65,8 @@ The headers are in [`sdk/include`](sdk/include): `playkit.h` is the plain C API,
 
 Mods are loaded on the game thread at the first Blueprint call, after the engine has started. They are loaded in file name order.
 
+To share a native mod, publish it through Playkit: the DLL goes in the mod folder at `Playtime_Multiplayer/Binaries/Win64/playkit-mods/<mod id>.dll`, the source code in `source/`. See [Native mods in the mod list guide](https://github.com/MCbabel/playkit-mods/blob/main/CONTRIBUTING.md#native-mods-c).
+
 ### SDK: C++ headers of the game
 
 Create an empty file `playkit-sdk.request` next to the game executable while the game runs. A few seconds later the loader writes `playkit-sdk/` there with:
@@ -88,7 +90,7 @@ The header can also be generated on any machine from a database with `playkit-sd
 Every start writes `playkit-loader.log` next to the game executable:
 
 ```
-playkit loader 0.2.0
+playkit loader 0.3.0
 IsNonPakFilenameAllowed at +0x29af8a0: patched
 FPakFile::Find at +0x29aa970: hooked
 ProcessLocalScriptFunction at +0x15ec4a0: hooked

@@ -555,7 +555,14 @@ async fn install_files(
         .ok_or_else(|| Error::UnknownMod(id.into()))?
         .clone();
     for f in &m.files {
-        crate::package::check_path(&f.path)?;
+        crate::package::check_mod_path(&f.path, &m.id)?;
+    }
+    if m.is_native() && !crate::loader::supports_native(game) {
+        return Err(Error::Invalid(format!(
+            "{} needs the Playkit loader {} or newer. Open Setup and install the loader.",
+            m.name,
+            crate::loader::NATIVE_SINCE
+        )));
     }
     let fresh = build(game, index, &m, progress).await?;
     let mut state = State::load(game)?;
@@ -871,6 +878,49 @@ mod tests {
             .await
             .is_err());
         assert!(!dir.path().parent().unwrap().join("evil.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn native_mods_need_the_new_loader_and_their_own_dll_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = fake_game(dir.path());
+        let rel = crate::package::native_path("hello");
+        let idx = index(vec![
+            demo_mod("hello", &dir.path().join("h.bin"), b"MZ mod", &rel),
+            demo_mod("other", &dir.path().join("o.bin"), b"MZ mod", &rel),
+        ]);
+        assert!(idx.get("hello").unwrap().is_native());
+        assert!(!idx.get("other").unwrap().is_native());
+        // A DLL named after another mod is rejected.
+        assert!(install_files(&game, &idx, "other", false, &|_, _| {})
+            .await
+            .is_err());
+
+        // No loader, then an old one: refused.
+        let err = install_files(&game, &idx, "hello", false, &|_, _| {})
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("loader"), "{err}");
+        let dxgi = game.binaries().join(crate::loader::DLL);
+        std::fs::write(&dxgi, b"MZ playkit loader 0.2.1\0").unwrap();
+        assert!(install_files(&game, &idx, "hello", false, &|_, _| {})
+            .await
+            .is_err());
+
+        std::fs::write(&dxgi, b"MZ playkit loader 0.3.0\0").unwrap();
+        install_files(&game, &idx, "hello", false, &|_, _| {})
+            .await
+            .unwrap();
+        let dll = dir.path().join(&rel);
+        assert_eq!(std::fs::read(&dll).unwrap(), b"MZ mod");
+        set_enabled(&game, "", "hello", false).unwrap();
+        assert!(!dll.exists());
+        set_enabled(&game, "", "hello", true).unwrap();
+        assert!(dll.exists());
+        uninstall_files(&game, "", "hello").unwrap();
+        assert!(!dll.exists());
+        assert!(!dll.parent().unwrap().exists());
+        assert!(dxgi.exists());
     }
 
     #[tokio::test]

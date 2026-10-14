@@ -14,6 +14,10 @@ pub const CATEGORIES: &[&str] = &[
     "other",
 ];
 pub const MAX_FILE: u64 = 50 * 1024 * 1024;
+/// Folder of native (C++) mods, loaded by the Playkit loader.
+pub const NATIVE_DIR: &str = "Binaries/Win64/playkit-mods";
+/// Source code that comes with a mod: required for native mods, and `.bps` patches are kept there.
+pub const SOURCE_DIR: &str = "source";
 const BLOCKED_EXT: &[&str] = &["exe", "dll", "bat", "cmd", "ps1", "sh", "so", "lua", "py"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +64,8 @@ pub struct PackReport {
     pub out: PathBuf,
     pub files: Vec<PackedFile>,
     pub skipped_unchanged: Vec<String>,
+    /// Source files kept next to the mod for review.
+    pub sources: Vec<String>,
 }
 
 impl Manifest {
@@ -127,6 +133,38 @@ pub fn check_path(rel: &str) -> Result<()> {
     Ok(())
 }
 
+/// The only place a native mod may put code: `Binaries/Win64/playkit-mods/<id>.dll`.
+pub fn native_path(id: &str) -> String {
+    format!("{PROJECT}/{NATIVE_DIR}/{id}.dll")
+}
+
+/// Like [`check_path`], but also allows the native DLL of mod `id`.
+pub fn check_mod_path(rel: &str, id: &str) -> Result<()> {
+    if valid_id(id) && rel == native_path(id) {
+        return Ok(());
+    }
+    check_path(rel)
+}
+
+/// Files below `dir`, relative to it, with `/` separators.
+fn rel_files(dir: &Path) -> Result<Vec<String>> {
+    let mut paths = Vec::new();
+    if dir.is_dir() {
+        walk(dir, &mut paths)?;
+    }
+    let mut out: Vec<String> = paths
+        .iter()
+        .map(|p| {
+            p.strip_prefix(dir)
+                .expect("inside dir")
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+    out.sort();
+    Ok(out)
+}
+
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     for e in std::fs::read_dir(dir).map_err(|e| Error::io(dir, e))? {
         let e = e.map_err(|e| Error::io(dir, e))?;
@@ -140,9 +178,21 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-pub fn pack(src: &Path, game_pak: &Path, pak_key: &str, repo: &Path) -> Result<PackReport> {
+/// Packs the mod folder `src` into `repo/mods/<id>`. Changed game files become patches against
+/// the original. A `.bps` file next to where an asset would be (`UI_Foo.bps` for
+/// `UI_Foo.uasset`) is applied to the original asset with bpscript first; `reflection` is the
+/// database it uses for short names. A native mod puts its DLL at [`native_path`] and its code in
+/// `source/`.
+pub fn pack(
+    src: &Path,
+    game_pak: &Path,
+    pak_key: &str,
+    repo: &Path,
+    reflection: Option<&Path>,
+) -> Result<PackReport> {
     let manifest = Manifest::load(&src.join("mod.toml"))?;
     manifest.validate()?;
+    let id = manifest.id.clone();
     let content = src.join(PROJECT);
     if !content.is_dir() {
         return Err(Error::Invalid(format!(
@@ -150,25 +200,92 @@ pub fn pack(src: &Path, game_pak: &Path, pak_key: &str, repo: &Path) -> Result<P
             src.display()
         )));
     }
-    let mut paths = Vec::new();
-    walk(&content, &mut paths)?;
-    paths.sort();
-    let out = repo.join("mods").join(&manifest.id);
-    let files_dir = out.join("files");
-    if files_dir.exists() {
-        std::fs::remove_dir_all(&files_dir).map_err(|e| Error::io(&files_dir, e))?;
+    let rels: Vec<String> = rel_files(&content)?
+        .into_iter()
+        .map(|r| format!("{PROJECT}/{r}"))
+        .collect();
+    let sources = rel_files(&src.join(SOURCE_DIR))?;
+    for s in &sources {
+        let ext = s
+            .rsplit('.')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if ["exe", "dll", "so", "lib", "a", "o", "obj", "pdb"].contains(&ext.as_str()) {
+            return Err(Error::Invalid(format!(
+                "{SOURCE_DIR}/{s}: only source code belongs in {SOURCE_DIR}/, no built files"
+            )));
+        }
+    }
+    let native = native_path(&id);
+    if rels.contains(&native) && sources.is_empty() {
+        return Err(Error::Invalid(format!(
+            "{native} needs its source code in a {SOURCE_DIR} folder next to mod.toml"
+        )));
+    }
+    if let Some(dll) = rels.iter().find(|r| {
+        r.to_ascii_lowercase().ends_with(".dll") && **r != native && r.contains(NATIVE_DIR)
+    }) {
+        return Err(Error::Invalid(format!(
+            "{dll}: a native mod has exactly one DLL, named {native}"
+        )));
     }
     let mut pak = Pak::open(game_pak, pak_key)?;
+    let mut targets: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut scripts: Vec<String> = Vec::new();
+    let mut db: Option<playkit_reflect::Db> = None;
+    for rel in &rels {
+        if !rel.to_ascii_lowercase().ends_with(".bps") {
+            check_mod_path(rel, &id)?;
+            let p = src.join(rel);
+            targets.push((
+                rel.clone(),
+                std::fs::read(&p).map_err(|e| Error::io(&p, e))?,
+            ));
+            continue;
+        }
+        let stem = &rel[..rel.len() - 4];
+        let header = [".uasset", ".umap"]
+            .iter()
+            .map(|e| format!("{stem}{e}"))
+            .find(|h| pak.contains(h))
+            .ok_or_else(|| Error::Invalid(format!("{rel}: the game has no asset {stem}.uasset")))?;
+        let uexp = format!("{stem}.uexp");
+        if let Some(both) = [&header, &uexp].into_iter().find(|f| rels.contains(f)) {
+            return Err(Error::Invalid(format!(
+                "{rel} and {both}: use either the .bps patch or the changed asset"
+            )));
+        }
+        if db.is_none() {
+            if let Some(p) = reflection.filter(|p| p.is_file()) {
+                db = Some(playkit_reflect::Db::load(p).map_err(Error::Invalid)?);
+            }
+        }
+        let index = db.as_ref().map(playkit_reflect::Db::index);
+        let text =
+            std::fs::read_to_string(src.join(rel)).map_err(|e| Error::io(&src.join(rel), e))?;
+        let base = bpscript::Files {
+            uasset: pak.read(&header)?,
+            uexp: pak.read(&uexp)?,
+        };
+        let bad = |e: bpscript::Error| Error::Invalid(format!("{rel}: {e}"));
+        let mut asset = bpscript::load(&base).map_err(bad)?;
+        bpscript::patch::apply_with(&mut asset, &text, index.as_ref()).map_err(bad)?;
+        let out = bpscript::save(&asset).map_err(bad)?;
+        targets.push((header, out.uasset));
+        targets.push((uexp, out.uexp));
+        scripts.push(rel.clone());
+    }
+    let out = repo.join("mods").join(&id);
+    for dir in [out.join("files"), out.join(SOURCE_DIR)] {
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
+        }
+    }
+    let files_dir = out.join("files");
     let mut files = Vec::new();
     let mut skipped = Vec::new();
-    for p in paths {
-        let rel = p
-            .strip_prefix(src)
-            .expect("inside src")
-            .to_string_lossy()
-            .replace('\\', "/");
-        check_path(&rel)?;
-        let target = std::fs::read(&p).map_err(|e| Error::io(&p, e))?;
+    for (rel, target) in targets {
         let (payload_name, payload, base_sha256) = if pak.contains(&rel) {
             let base = pak.read(&rel)?;
             if base == target {
@@ -200,13 +317,23 @@ pub fn pack(src: &Path, game_pak: &Path, pak_key: &str, repo: &Path) -> Result<P
     if files.is_empty() {
         return Err(Error::Invalid("no changed files found".into()));
     }
+    let mut source_files = Vec::new();
+    for s in &sources {
+        fsx::copy_into(&src.join(SOURCE_DIR).join(s), &out.join(SOURCE_DIR).join(s))?;
+        source_files.push(format!("{SOURCE_DIR}/{s}"));
+    }
+    for rel in scripts {
+        fsx::copy_into(&src.join(&rel), &out.join(SOURCE_DIR).join(&rel))?;
+        source_files.push(format!("{SOURCE_DIR}/{rel}"));
+    }
     fsx::copy_into(&src.join("mod.toml"), &out.join("mod.toml"))?;
     fsx::write_atomic(&out.join("files.json"), &serde_json::to_vec_pretty(&files)?)?;
     Ok(PackReport {
-        id: manifest.id,
+        id,
         out,
         files,
         skipped_unchanged: skipped,
+        sources: source_files,
     })
 }
 
@@ -251,9 +378,16 @@ pub fn build_index(repo: &Path, base_url: &str) -> Result<Index> {
         if packed.is_empty() {
             return Err(Error::Invalid(format!("{}: no files", m.id)));
         }
+        let native = packed.iter().any(|f| f.path == native_path(&m.id));
+        if native && rel_files(&dir.join(SOURCE_DIR))?.is_empty() {
+            return Err(Error::Invalid(format!(
+                "{}: native mods must include their source code in {SOURCE_DIR}/",
+                m.id
+            )));
+        }
         let mut files = Vec::new();
         for f in packed {
-            check_path(&f.path)?;
+            check_mod_path(&f.path, &m.id)?;
             let payload_path = dir.join(&f.payload);
             let canon_ok =
                 f.payload.starts_with("files/") && !f.payload.split('/').any(|p| p == "..");
@@ -329,4 +463,30 @@ fn check_requirements(mods: &[Mod]) -> Result<()> {
         crate::install::resolve(mods, &m.id)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_dll_only_at_its_own_path() {
+        let own = native_path("hello");
+        assert_eq!(
+            own,
+            "Playtime_Multiplayer/Binaries/Win64/playkit-mods/hello.dll"
+        );
+        assert!(check_mod_path(&own, "hello").is_ok());
+        assert!(check_mod_path(&own, "other").is_err());
+        assert!(check_path(&own).is_err());
+        for bad in [
+            "Playtime_Multiplayer/Binaries/Win64/dxgi.dll",
+            "Playtime_Multiplayer/Binaries/Win64/playkit-mods/../dxgi.dll",
+            "Playtime_Multiplayer/Binaries/Win64/playkit-mods/hello.exe",
+            "Playtime_Multiplayer/Content/Mods/hello.dll",
+        ] {
+            assert!(check_mod_path(bad, "hello").is_err(), "{bad}");
+        }
+        assert!(check_mod_path("Playtime_Multiplayer/Content/UI/UI_A.uasset", "hello").is_ok());
+    }
 }

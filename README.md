@@ -71,6 +71,8 @@ Two tools make writing mods easier:
 - **[bpscript](crates/bpscript)**: turns the Blueprint bytecode of an asset into readable text and back, byte for byte. Patch files add variables, functions and events, and hook into existing functions (`before`, `after`, `replace`). This replaces hand-written bytecode patches, and the results still combine with other mods.
 - **[Native C++ mods](crates/loader#native-c-mods)**: the loader runs C and C++ mods that hook Blueprint functions, call any game function and patch native code. It can also generate typed C++ headers of the whole game.
 
+Both can be published through Playkit. A `.bps` patch in a mod folder is applied to the original asset when the mod is packed, so it installs and combines like any other mod. A native mod ships its DLL together with its source code, which is reviewed before it is listed; Playkit marks such mods and asks before installing them.
+
 ## License
 
 [MIT](LICENSE)

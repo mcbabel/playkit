@@ -19,6 +19,8 @@ sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 dirs = "6"
 toml.workspace = true
 playkit-merge = { path = "../merge" }
+playkit-reflect = { path = "../reflect" }
+bpscript = { path = "../bpscript" }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

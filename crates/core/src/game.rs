@@ -51,6 +51,11 @@ impl Game {
         self.root.join(PROJECT).join("Binaries/Win64")
     }
 
+    /// Reflection database the loader writes on request (`playkit-sdk.request`).
+    pub fn reflection(&self) -> PathBuf {
+        self.binaries().join("playkit-sdk/reflection.json")
+    }
+
     pub fn pak(&self) -> PathBuf {
         self.root
             .join(PROJECT)
