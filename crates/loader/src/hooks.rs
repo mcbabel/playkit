@@ -38,7 +38,6 @@ unsafe extern "system" fn find_hook(
 }
 
 pub fn install() {
-    crate::log::reset();
     let base = crate::scan::base();
 
     match crate::scan::find(IS_NON_PAK_FILENAME_ALLOWED) {

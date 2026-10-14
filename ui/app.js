@@ -460,6 +460,19 @@ function step(n, state, title, ...body) {
   return el("li", { class: `step ${state === "todo" ? "active" : ""}` }, el("span", { class: `step-num ${cls}` }, state === "done" ? icon("check", 20, "#0E2A1B") : String(n)), el("div", { class: "step-body" }, el("h3", { text: title }), body));
 }
 
+function lastRunInfo(run) {
+  if (!run) return el("p", { class: "warn", text: "The loader has not run yet. Start the game once, then come back here. If this stays, the game does not load dxgi.dll." });
+  const when = new Date(run.modified * 1000).toLocaleString();
+  const files = run.loose_files == null ? "" : ` and found ${run.loose_files} mod files`;
+  const ok = !run.problems.length;
+  return el(
+    "details",
+    { class: "lastrun" },
+    el("summary", { class: ok ? "good" : "warn", text: ok ? `Last game start (${when}): the loader ran${files}.` : `Last game start (${when}): the loader ran with problems.` }),
+    el("div", { class: "code", text: run.log })
+  );
+}
+
 function renderSetup() {
   const s = app.status;
   if (!s) return [el("h1", { text: "Game setup" })];
@@ -506,7 +519,7 @@ function renderSetup() {
           ? [el("div", { class: "inline" }, el("span", { class: "path", text: game.root }), el("button", { class: "btn btn-ghost", onclick: chooseGameDir, text: "Change" }), game.custom_dir ? el("button", { class: "btn btn-ghost", onclick: async () => { await invoke("set_game_dir", { path: null }); reload(false); }, text: "Auto-detect" }) : null), el("span", { class: "hint", text: `Build ${game.build_name || game.build_id || "unknown"}` })]
           : [el("p", { text: s.game_error || "Project Playtime was not found." }), el("button", { class: "btn btn-accent", onclick: chooseGameDir }, icon("folder", 18, "#1A1405"), "Choose folder")]
       ),
-      step(2, dll === "current" || dll === "foreign" ? "done" : game ? "todo" : "", "Mod loader", el("p", { text: "A small loader next to the game lets it read mod files from its Content folder." }), dll ? el("p", { class: dll === "current" ? "good" : dll === "foreign" ? "info" : "warn", text: dllText }) : null),
+      step(2, dll === "current" || dll === "foreign" ? "done" : game ? "todo" : "", "Mod loader", el("p", { text: "A small loader next to the game lets it read mod files from its Content folder." }), dll ? el("p", { class: dll === "current" ? "good" : dll === "foreign" ? "info" : "warn", text: dllText }) : null, dll === "current" ? lastRunInfo(s.loader.last_run) : null),
       ac && ac !== "absent"
         ? step(3, ac === "patched" ? "done" : "todo", "Easy Anti-Cheat settings", el("p", { text: "Playkit sets the product, sandbox and deployment IDs in EasyAntiCheat/Settings.json to 123. The original file is kept as a backup." }), ac === "patched" ? el("p", { class: "good", text: "Already set." }) : null)
         : null,

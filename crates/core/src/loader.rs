@@ -30,6 +30,47 @@ pub struct Status {
     pub dll: DllState,
     pub launch_option: LaunchOption,
     pub anti_cheat: AntiCheat,
+    pub last_run: Option<LastRun>,
+}
+
+/// What the loader wrote at the last game start.
+#[derive(Debug, Clone, Serialize)]
+pub struct LastRun {
+    pub modified: u64,
+    pub log: String,
+    pub loose_files: Option<u32>,
+    pub problems: Vec<String>,
+}
+
+pub fn last_run(game: &Game) -> Option<LastRun> {
+    let candidates = [
+        game.binaries().join("playkit-loader.log"),
+        std::env::temp_dir().join("playkit-loader.log"),
+    ];
+    let (path, modified) = candidates
+        .iter()
+        .filter_map(|p| Some((p, std::fs::metadata(p).ok()?.modified().ok()?)))
+        .max_by_key(|(_, m)| *m)?;
+    let log = std::fs::read_to_string(path).ok()?;
+    let log: String = log.lines().take(40).collect::<Vec<_>>().join("\n");
+    let loose_files = log.lines().find_map(|l| {
+        l.split_once(" loose files")
+            .and_then(|(n, _)| n.trim().parse().ok())
+    });
+    let problems = log
+        .lines()
+        .filter(|l| l.contains("not found") || l.contains("failed") || l.contains("cannot"))
+        .map(str::to_string)
+        .collect();
+    Some(LastRun {
+        modified: modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        log,
+        loose_files,
+        problems,
+    })
 }
 
 impl Status {
@@ -74,6 +115,7 @@ pub fn status(game: &Game, platform: &Platform, bundled: &Bundled) -> Status {
         dll,
         launch_option: launch_option_state(game, platform),
         anti_cheat: anticheat::status(game),
+        last_run: last_run(game),
     }
 }
 

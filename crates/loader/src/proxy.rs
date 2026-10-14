@@ -26,6 +26,8 @@ macro_rules! forward {
             let real = unsafe { LoadLibraryW(path.as_ptr()) };
             if real.is_null() {
                 crate::log::write("real dxgi.dll not found");
+            } else {
+                crate::log::write("system dxgi.dll loaded");
             }
             $(
                 let addr = if real.is_null() {

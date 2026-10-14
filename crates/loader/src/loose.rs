@@ -11,15 +11,18 @@ pub struct Loose {
 
 static LOOSE: OnceLock<Loose> = OnceLock::new();
 
-pub fn exe_dir() -> Option<PathBuf> {
+pub fn exe_path() -> Option<PathBuf> {
     let mut buf = vec![0u16; 1024];
     let n = unsafe { GetModuleFileNameW(std::ptr::null_mut(), buf.as_mut_ptr(), buf.len() as u32) }
         as usize;
     if n == 0 || n >= buf.len() {
         return None;
     }
-    let exe = PathBuf::from(std::ffi::OsString::from_wide(&buf[..n]));
-    exe.parent().map(Path::to_path_buf)
+    Some(PathBuf::from(std::ffi::OsString::from_wide(&buf[..n])))
+}
+
+pub fn exe_dir() -> Option<PathBuf> {
+    exe_path()?.parent().map(Path::to_path_buf)
 }
 
 fn scan(dir: &Path, root: &Path, out: &mut HashSet<String>) {

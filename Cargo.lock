@@ -391,7 +391,7 @@ dependencies = [
 
 [[package]]
 name = "bpscript"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ordered-float",
  "playkit-merge",
@@ -2942,7 +2942,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "playkit"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "dirs 6.0.0",
  "playkit-core",
@@ -2958,7 +2958,7 @@ dependencies = [
 
 [[package]]
 name = "playkit-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes",
  "dirs 6.0.0",
@@ -2981,7 +2981,7 @@ dependencies = [
 
 [[package]]
 name = "playkit-loader"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "iced-x86",
  "windows-sys 0.59.0",
@@ -2989,7 +2989,7 @@ dependencies = [
 
 [[package]]
 name = "playkit-merge"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "thiserror 2.0.21",
  "unreal_asset",
@@ -2997,7 +2997,7 @@ dependencies = [
 
 [[package]]
 name = "playkit-pack"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "playkit-core",

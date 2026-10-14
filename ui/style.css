@@ -175,3 +175,5 @@ main { flex: 1; min-width: 0; overflow-y: auto; padding: 32px 40px 48px; display
   .nav { flex-direction: row; flex-wrap: wrap; }
   main { overflow: visible; padding: 24px 16px; }
 }
+.lastrun summary { cursor: pointer; margin: 6px 0; }
+.lastrun .code { margin-top: 8px; white-space: pre-wrap; }

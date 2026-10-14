@@ -18,6 +18,7 @@ use windows_sys::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 #[unsafe(no_mangle)]
 pub extern "system" fn DllMain(_module: HINSTANCE, reason: u32, _reserved: *mut c_void) -> BOOL {
     if reason == DLL_PROCESS_ATTACH {
+        log::reset();
         proxy::load_real_dxgi();
         hooks::install();
         script::install();
