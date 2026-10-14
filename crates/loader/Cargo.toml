@@ -9,6 +9,7 @@ name = "dxgi"
 crate-type = ["cdylib"]
 
 [target.'cfg(windows)'.dependencies]
+playkit-reflect = { path = "../reflect" }
 iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "block_encoder", "encoder", "instr_info"] }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",

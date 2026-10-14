@@ -1,7 +1,9 @@
 use crate::ast::*;
-use crate::names::{find_fname, fname_text, make_fname, Objects, Want};
+use crate::names::{find_fname, fname_text, make_fname, split_path, Objects, Want};
+use crate::reflection::{self as rf, Func, Index, Struct};
 use crate::{measure, Asset};
 use ordered_float::OrderedFloat;
+use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
 use unreal_asset::exports::{Export, ExportBaseTrait};
 use unreal_asset::fproperty::FProperty;
@@ -232,6 +234,8 @@ pub struct Env<'p> {
     pub rv: Option<&'p KismetPropertyPointer>,
     pub uber_arg: bool,
     pub pos: u32,
+    /// Type of the object left of `.` according to the reflection database.
+    pub recv: Option<&'p Struct>,
 }
 
 impl Env<'_> {
@@ -255,6 +259,8 @@ pub struct Lower<'a> {
     pub uber_labels: HashMap<String, u32>,
     pub dummy: bool,
     pub aliases: HashMap<String, String>,
+    /// Reflection database, used for names the asset cannot resolve.
+    pub db: Option<&'a Index<'a>>,
 }
 
 fn f64of(b: u32) -> OrderedFloat<f64> {
@@ -351,6 +357,16 @@ fn let_kw_of_prop(p: &FProperty) -> LetKw {
 
 const OUT_PARM: u64 = 0x100;
 
+/// Class or struct that a value of this property points to or contains.
+fn fprop_target(p: &FProperty) -> i32 {
+    match p {
+        FProperty::FStructProperty(s) => s.struct_value.index,
+        FProperty::FObjectProperty(o) => o.property_class.index,
+        FProperty::FInterfaceProperty(o) => o.interface_class.index,
+        _ => 0,
+    }
+}
+
 impl<'a> Lower<'a> {
     pub fn new(asset: &'a Asset, create: bool) -> Self {
         Lower {
@@ -365,7 +381,13 @@ impl<'a> Lower<'a> {
             uber_labels: HashMap::new(),
             dummy: false,
             aliases: HashMap::new(),
+            db: None,
         }
+    }
+
+    pub fn with_db(mut self, db: Option<&'a Index<'a>>) -> Self {
+        self.db = db;
+        self
     }
 
     pub fn set_function(&mut self, func: i32) {
@@ -404,8 +426,230 @@ impl<'a> Lower<'a> {
     pub fn object(&mut self, r: &Ref, want: Want) -> R<i32> {
         match self.objs.resolve(r, want).as_slice() {
             [i] => Ok(*i),
+            [] if self.db.is_some() => {
+                let created = match self.create {
+                    true => self.objs.create(self.asset, r, want),
+                    false => Err(format!("{r} is not imported")),
+                };
+                match created {
+                    Ok(i) => Ok(i),
+                    Err(e) => match self.db_object(r, want)? {
+                        Some(i) => Ok(i),
+                        None if matches!(r, Ref::Path(_)) => Err(format!(
+                            "{r} not found in the asset or the reflection database{}",
+                            self.type_hint(r)
+                        )),
+                        None => Err(e),
+                    },
+                }
+            }
             [] if self.create => self.objs.create(self.asset, r, want),
             _ => self.objs.resolve_one(r, want),
+        }
+    }
+
+    fn type_hint(&self, r: &Ref) -> String {
+        let (Some(db), Ref::Path(segs)) = (self.db, r) else {
+            return String::new();
+        };
+        let Some(last) = segs.last() else {
+            return String::new();
+        };
+        let mut names = db.similar_types(&last.text, 5);
+        if names.is_empty() {
+            names = db.similar_functions(&last.text, 5);
+        }
+        rf::suggest(&names)
+    }
+
+    /// An existing import (or own export) with this object path.
+    fn existing(&self, path: &str) -> Option<i32> {
+        let r = Ref::Quoted {
+            class: None,
+            path: path.to_string(),
+        };
+        if let [i] = self.objs.resolve(&r, Want::Any).as_slice() {
+            return Some(*i);
+        }
+        if !path.starts_with("/Game/") {
+            return None;
+        }
+        let segs = split_path(path);
+        let r = Ref::Path(segs[1..].iter().map(|s| Name::new(s.clone())).collect());
+        self.objs.resolve(&r, Want::Export).into_iter().find(|&i| {
+            let o = &self.objs.objs[&i];
+            self.objs.chain(i).len() == segs.len() - 1
+                && (o.class.ends_with("Class")
+                    || o.class.ends_with("Struct")
+                    || o.class.ends_with("Function"))
+        })
+    }
+
+    fn need_create(&self, path: &str) -> R<()> {
+        if self.create {
+            Ok(())
+        } else {
+            Err(format!("{path} is not imported"))
+        }
+    }
+
+    pub fn import_struct(&mut self, s: &'a Struct) -> R<i32> {
+        if let Some(i) = self.existing(&s.path) {
+            return Ok(i);
+        }
+        self.need_create(&s.path)?;
+        let db = self.db.ok_or("no reflection database")?;
+        let (class, pkg) = rf::import_class(db, s);
+        self.objs
+            .ensure(self.asset, &split_path(&s.path), class, pkg)
+    }
+
+    pub fn import_function(&mut self, owner: &'a Struct, f: &'a Func) -> R<i32> {
+        let path = format!("{}:{}", owner.path, f.name);
+        if let Some(i) = self.existing(&path) {
+            return Ok(i);
+        }
+        self.need_create(&path)?;
+        self.import_struct(owner)?;
+        self.objs.ensure(
+            self.asset,
+            &split_path(&path),
+            rf::function_class(&path),
+            "/Script/CoreUObject",
+        )
+    }
+
+    fn import_cdo(&mut self, owner: &'a Struct) -> R<i32> {
+        let segs = split_path(&owner.path);
+        let [pkg, class] = segs.as_slice() else {
+            return Err(format!("{} has no default object", owner.path));
+        };
+        let path = format!("{pkg}.Default__{class}");
+        if let Some(i) = self.existing(&path) {
+            return Ok(i);
+        }
+        self.need_create(&path)?;
+        let segs = [pkg.clone(), format!("Default__{class}")];
+        self.objs.ensure(self.asset, &segs, class, pkg)
+    }
+
+    /// Class or struct of the database for an object of the asset.
+    pub fn db_struct(&self, i: i32) -> Option<&'a Struct> {
+        let db = self.db?;
+        match i.cmp(&0) {
+            Ordering::Less => db.get(&self.objs.path_string(i)),
+            Ordering::Greater => match db.named(&self.objs.name(i)) {
+                [s] => Some(*s),
+                _ => None,
+            },
+            Ordering::Equal => None,
+        }
+    }
+
+    /// Function of the database for a function object of the asset.
+    pub fn db_function_of(&self, f: i32) -> Option<(&'a Struct, &'a Func)> {
+        let owner = self.objs.get(f)?.outer;
+        let s = self.db_struct(owner)?;
+        let name = self.objs.name(f);
+        s.functions.iter().find(|x| x.name == name).map(|x| (s, x))
+    }
+
+    fn ambiguous(name: &str, cands: &[(&Struct, &Func)]) -> String {
+        let list: Vec<String> = cands
+            .iter()
+            .map(|(c, _)| format!("{}::{name}", rf::short_name(&c.path)))
+            .collect();
+        format!(
+            "{name} is ambiguous in the reflection database ({}); write Class::{name}",
+            list.join(", ")
+        )
+    }
+
+    /// Resolves a reference that the asset does not contain through the database and
+    /// imports it.
+    fn db_object(&mut self, r: &Ref, want: Want) -> R<Option<i32>> {
+        let Some(db) = self.db else { return Ok(None) };
+        let segs: Vec<&str> = match r {
+            Ref::Path(s) => s.iter().map(|n| n.text.as_str()).collect(),
+            Ref::Quoted { path, .. } => {
+                if let Some(s) = db.get(path) {
+                    return self.import_struct(s).map(Some);
+                }
+                let Some((class, name)) = path.rsplit_once(':') else {
+                    return Ok(None);
+                };
+                return match db.get(class).and_then(|c| db.function_nocase(c, name)) {
+                    Some((c, f)) => self.import_function(c, f).map(Some),
+                    None => Ok(None),
+                };
+            }
+            Ref::Index(_) => return Ok(None),
+        };
+        match segs.as_slice() {
+            [n] => {
+                let n = *n;
+                if want == Want::Function || n.ends_with("__DelegateSignature") {
+                    match db.functions_named_nocase(n).as_slice() {
+                        [(c, f)] => return self.import_function(c, f).map(Some),
+                        [] => {}
+                        many => return Err(Self::ambiguous(n, many)),
+                    }
+                    if n.ends_with("__DelegateSignature") {
+                        if let [p] = db.type_targets_named(n).as_slice() {
+                            if let Some(i) = self.existing(p) {
+                                return Ok(Some(i));
+                            }
+                            self.need_create(p)?;
+                            let class = rf::function_class(p);
+                            let segs = split_path(p);
+                            if segs.len() == 3 {
+                                if let Some(s) = db.get(&format!("{}.{}", segs[0], segs[1])) {
+                                    self.import_struct(s)?;
+                                }
+                            }
+                            return self
+                                .objs
+                                .ensure(self.asset, &segs, class, "/Script/CoreUObject")
+                                .map(Some);
+                        }
+                    }
+                    if want == Want::Function {
+                        return Ok(None);
+                    }
+                }
+                if let Some(class) = n.strip_prefix("Default__") {
+                    if let [s] = db.named(class) {
+                        return self.import_cdo(s).map(Some);
+                    }
+                }
+                let found: Vec<&Struct> = db
+                    .named(n)
+                    .iter()
+                    .copied()
+                    .filter(|s| match want {
+                        Want::Class => s.kind == "class",
+                        Want::Struct => s.kind == "struct",
+                        _ => true,
+                    })
+                    .collect();
+                match found.as_slice() {
+                    [s] => self.import_struct(s).map(Some),
+                    _ => Ok(None),
+                }
+            }
+            [class, n] if matches!(want, Want::Function | Want::Any) => {
+                let Some(c) = db.named(class).first().copied() else {
+                    return Ok(None);
+                };
+                match db.function_nocase(c, n) {
+                    Some((c, f)) => self.import_function(c, f).map(Some),
+                    None => Err(format!(
+                        "{class} has no function {n}{}",
+                        rf::suggest(&db.similar_members(c, n, 5))
+                    )),
+                }
+            }
+            _ => Ok(None),
         }
     }
 
@@ -492,12 +736,19 @@ impl<'a> Lower<'a> {
                         name = Name::new(a.clone());
                     }
                 }
-                let found = match self.resolve_bare(&name.text, env.member) {
-                    None if env.member && env.owner_hint != 0 => {
-                        Some((VarKind::Inst, env.owner_hint))
+                let mut found = self.resolve_bare(&name.text, env.member);
+                if env.member {
+                    let asset_owner = found.map(|(_, o)| o);
+                    if let Some(o) = self.db_member_owner(&name.text, asset_owner, env)? {
+                        found = Some((VarKind::Inst, o));
+                    } else if found.is_none() && env.owner_hint != 0 {
+                        let declared = self.declared(env.owner_hint, &name.text).is_some();
+                        if env.recv.is_some() && !declared {
+                            return Err(self.unknown_variable(&name.text, env));
+                        }
+                        found = Some((VarKind::Inst, env.owner_hint));
                     }
-                    r => r,
-                };
+                }
                 if let Some((kind, owner)) = found {
                     let f = self.fname(&name)?;
                     return Ok(Self::var_expr(kind, kptr(owner, vec![f])));
@@ -509,11 +760,15 @@ impl<'a> Lower<'a> {
                             value: PackageIndex::new(*i)
                         }));
                     }
+                    if let Some(e) = self.db_bare(&name)? {
+                        return Ok(e);
+                    }
                 }
-                Err(format!(
-                    "unknown variable {}; write Owner::{} for a variable of another class",
-                    name.text, name.text
-                ))
+                Err(self.unknown_variable(&name.text, env))
+            }
+            Some(Ref::Path(o)) if o.len() == 1 && p.path.len() == 1 && self.is_db_enum(&o[0]) => {
+                let v = self.enum_value(&o[0].text, &p.path[0].text)?;
+                Ok(ke!(ExByteConst { value: v }))
             }
             _ => {
                 let ptr = self.explicit_ptr(p)?;
@@ -603,6 +858,9 @@ impl<'a> Lower<'a> {
             if let Some(k) = unique(self.info.virt_tokens.get(name)) {
                 return k;
             }
+            if let (Some(db), Some((c, func))) = (self.db, self.db_function_of(f)) {
+                return rf::call_kind(db, c, func);
+            }
             if self.objs.is_native(f) {
                 return if member {
                     CallKind::Final
@@ -621,33 +879,90 @@ impl<'a> Lower<'a> {
             _ => None,
         };
         let virt = matches!(kind, Some(CallKind::Virtual | CallKind::LocalVirtual));
-        let func = if virt {
-            None
-        } else {
+        let mut func = None;
+        if !virt {
             let found: Vec<i32> = self
                 .objs
                 .resolve(head, Want::Function)
                 .into_iter()
                 .filter(|&i| self.objs.is_function(i))
                 .collect();
+            let found = self.by_receiver(found, single.as_ref(), env);
             match found.as_slice() {
-                [f] => Some(*f),
-                [] if matches!(head, Ref::Quoted { .. } | Ref::Index(_)) || kind.is_some() => {
-                    Some(self.object(head, Want::Function)?)
+                [f] => func = Some(*f),
+                [] if matches!(head, Ref::Quoted { .. } | Ref::Index(_)) => {
+                    func = Some(self.object(head, Want::Function)?)
                 }
-                [] => None,
+                [] if kind.is_some() && self.db.is_none() => {
+                    func = Some(self.object(head, Want::Function)?)
+                }
+                [] => {}
                 _ => return Err(self.objs.resolve_one(head, Want::Function).unwrap_err()),
             }
+        }
+        let known_name = single.as_ref().is_some_and(|n| {
+            self.info
+                .virt_tokens
+                .get(&n.text)
+                .is_some_and(|k| k.len() == 1)
+        });
+        let mut dbf = None;
+        if func.is_none() && !virt && !known_name && self.db.is_some() {
+            dbf = self.db_function(head, args.len(), env)?;
+        }
+        if func.is_none() && dbf.is_none() && kind.is_some() && !virt {
+            func = Some(self.object(head, Want::Function)?);
+        }
+        let evidence = func.is_some_and(|f| {
+            self.info.call_tokens.contains_key(&f) || self.info.func_flags.contains_key(&f)
+        });
+        if dbf.is_none() && !evidence {
+            dbf = func.and_then(|f| self.db_function_of(f));
+        }
+        let name = match (func, dbf, &single) {
+            (Some(f), _, _) => Name::new(self.objs.name(f)),
+            (None, Some((_, f)), _) => Name::new(f.name.clone()),
+            (None, None, Some(n)) => n.clone(),
+            (None, None, None) => return Err(format!("function {head} not found")),
         };
-        let name = match (func, &single) {
-            (Some(f), _) => Name::new(self.objs.name(f)),
-            (None, Some(n)) => n.clone(),
-            (None, None) => return Err(format!("function {head} not found")),
+        let inferred = kind.is_none();
+        let kind = match (kind, func, dbf) {
+            (Some(k), _, _) => k,
+            (None, None, Some((c, f))) => rf::call_kind(self.db.expect("database"), c, f),
+            (None, _, _) => self.infer_call(func, &name.text, env.member),
         };
-        let kind = match kind {
-            Some(k) => k,
-            None => self.infer_call(func, &name.text, env.member),
-        };
+        let virtual_kind = matches!(kind, CallKind::Virtual | CallKind::LocalVirtual);
+        if let Some((c, f)) = dbf {
+            if !evidence {
+                Self::check_args(c, f, args)?;
+            }
+            if inferred
+                && !env.member
+                && f.is_static()
+                && kind != CallKind::Math
+                && !self.in_self_chain(c)
+            {
+                let cdo = self.import_cdo(c)?;
+                let head = if virtual_kind {
+                    Ref::Path(vec![name.clone()])
+                } else {
+                    Ref::Index(match func {
+                        Some(i) => i,
+                        None => self.import_function(c, f)?,
+                    })
+                };
+                let call = Expr::Call {
+                    kind: Some(kind),
+                    head,
+                    args: args.to_vec(),
+                };
+                let obj = Expr::Obj(Ref::Index(cdo));
+                return self.ctx(&obj, CtxOp::Normal, None, None, &call, env);
+            }
+            if func.is_none() && !virtual_kind {
+                func = Some(self.import_function(c, f)?);
+            }
+        }
         let uber = func.is_some_and(|f| f == self.uber && f != 0);
         match kind {
             CallKind::Virtual | CallKind::LocalVirtual => {
@@ -713,6 +1028,9 @@ impl<'a> Lower<'a> {
             if s.len() == 1 {
                 return s.iter().next().copied();
             }
+        }
+        if let Some(s) = self.db_struct(ty).filter(|s| s.kind == "struct") {
+            return Some(s.size);
         }
         builtin_struct_size(&self.objs.name(ty))
     }
@@ -823,9 +1141,23 @@ impl<'a> Lower<'a> {
                 inner,
             } => self.ctx(obj, *op, rv.as_ref(), *skip, inner, env)?,
             Expr::Member(x, p) => {
+                let mut lowered = None;
                 let m = match (&p.owner, p.path.as_slice()) {
                     (None, [n]) => {
-                        let owner = self.unique_owner(&n.text, true).ok_or_else(|| {
+                        let owner = match self.unique_owner(&n.text, true) {
+                            Some(o) => Some(o),
+                            None if self.db.is_some() => {
+                                let s = self.expr(x, Env::at(pos + 9))?;
+                                let env = Env {
+                                    recv: self.recv_of(&s),
+                                    ..Env::default()
+                                };
+                                lowered = Some(s);
+                                self.db_member_owner(&n.text, None, env)?
+                            }
+                            None => None,
+                        };
+                        let owner = owner.ok_or_else(|| {
                             format!(
                                 "cannot tell which struct owns {}; write Struct::{}",
                                 n.text, n.text
@@ -836,7 +1168,10 @@ impl<'a> Lower<'a> {
                     }
                     _ => self.explicit_ptr(p)?,
                 };
-                let s = self.expr(x, Env::at(pos + 9))?;
+                let s = match lowered {
+                    Some(s) => s,
+                    None => self.expr(x, Env::at(pos + 9))?,
+                };
                 ke!(ExStructMemberContext {
                     struct_member_expression: m,
                     struct_expression: b(s)
@@ -1080,12 +1415,7 @@ impl<'a> Lower<'a> {
 
     fn prop_type(&self, p: &KismetPropertyPointer) -> i32 {
         let Some(k) = pkey(p) else { return 0 };
-        match self.info.declared.get(&k) {
-            Some(FProperty::FStructProperty(s)) => s.struct_value.index,
-            Some(FProperty::FObjectProperty(o)) => o.property_class.index,
-            Some(FProperty::FInterfaceProperty(o)) => o.interface_class.index,
-            _ => 0,
-        }
+        self.info.declared.get(&k).map(fprop_target).unwrap_or(0)
     }
 
     fn infer_signature(&self, del: &KE) -> Option<i32> {
@@ -1115,11 +1445,13 @@ impl<'a> Lower<'a> {
         let pos = env.pos;
         let o = self.expr(obj, Env::at(pos + 1))?;
         let ipos = pos + 1 + self.size(&o)? + 12;
+        let recv = self.recv_of(&o);
         let i = self.expr(
             inner,
             Env {
                 member: true,
                 owner_hint: self.static_type(&o),
+                recv,
                 ..Env::at(ipos)
             },
         )?;
@@ -1180,7 +1512,10 @@ impl<'a> Lower<'a> {
         }
         match self.info.declared.get(&k) {
             Some(p) => let_kw_of_prop(p),
-            None => LetKw::Let,
+            None => self
+                .db_prop(&k)
+                .map(|p| rf::let_kw(&p.ty))
+                .unwrap_or(LetKw::Let),
         }
     }
 
@@ -1383,5 +1718,394 @@ impl<'a> Lower<'a> {
                 })
             }
         }))
+    }
+}
+
+impl<'a> Lower<'a> {
+    fn in_self_chain(&self, c: &Struct) -> bool {
+        match (self.db, self.db_struct(self.class)) {
+            (Some(db), Some(s)) => db.is_child_of(s, &c.path),
+            _ => false,
+        }
+    }
+
+    /// Keeps the functions of the asset that the receiver type can call. When none fits but the
+    /// database knows the function for that type, the asset candidates are dropped.
+    fn by_receiver(&self, found: Vec<i32>, name: Option<&Name>, env: Env) -> Vec<i32> {
+        let (Some(db), true, Some(recv), Some(n)) = (self.db, env.member, env.recv, name) else {
+            return found;
+        };
+        if found.is_empty() {
+            return found;
+        }
+        let fits: Vec<i32> = found
+            .iter()
+            .copied()
+            .filter(|&f| {
+                let owner = self.objs.get(f).map(|o| o.outer).unwrap_or(0);
+                self.db_struct(owner)
+                    .is_none_or(|s| db.is_child_of(recv, &s.path))
+            })
+            .collect();
+        if !fits.is_empty() {
+            fits
+        } else if db.function_nocase(recv, &n.text).is_some() {
+            vec![]
+        } else {
+            found
+        }
+    }
+
+    /// A function that the asset does not know, looked up in the database.
+    fn db_function(&self, head: &Ref, args: usize, env: Env) -> R<Option<(&'a Struct, &'a Func)>> {
+        let Some(db) = self.db else { return Ok(None) };
+        let segs: Vec<&str> = match head {
+            Ref::Path(s) => s.iter().map(|n| n.text.as_str()).collect(),
+            _ => return Ok(None),
+        };
+        let hint = "; write virtual Name(...) to call a function the database does not know";
+        let recv = env.recv.and_then(|r| db.get(&r.path));
+        match segs.as_slice() {
+            [n] if env.member => {
+                if let Some(x) = recv.and_then(|r| db.function_nocase(r, n)) {
+                    return Ok(Some(x));
+                }
+                let all = db.functions_named_nocase(n);
+                let sub: Vec<&(&Struct, &Func)> = match recv {
+                    Some(r) => all
+                        .iter()
+                        .filter(|(c, _)| db.is_child_of(c, &r.path))
+                        .collect(),
+                    None => all.iter().collect(),
+                };
+                if let [x] = sub.as_slice() {
+                    return Ok(Some(**x));
+                }
+                if !all.is_empty() {
+                    return Ok(None);
+                }
+                let similar = match env.recv {
+                    Some(r) => db.similar_members(r, n, 5),
+                    None => db.similar_functions(n, 5),
+                };
+                let what = match env.recv {
+                    Some(r) => format!("{} has no function {n}", rf::short_name(&r.path)),
+                    None => format!("function {n} not found"),
+                };
+                Err(format!("{what}{}{hint}", rf::suggest(&similar)))
+            }
+            [n] => {
+                let own = self
+                    .db_struct(self.class)
+                    .and_then(|s| db.function_nocase(s, n));
+                let all = db.functions_named_nocase(n);
+                let mut cands: Vec<(&Struct, &Func)> = own.into_iter().collect();
+                cands.extend(all.iter().copied().filter(|(_, f)| f.is_static()));
+                if cands.len() > 1 {
+                    let fit: Vec<(&Struct, &Func)> = cands
+                        .iter()
+                        .copied()
+                        .filter(|(_, f)| rf::call_params(f).len() == args)
+                        .collect();
+                    if !fit.is_empty() {
+                        cands = fit;
+                    }
+                }
+                match cands.as_slice() {
+                    [x] => Ok(Some(*x)),
+                    [] if !all.is_empty() => {
+                        let owners: Vec<&str> =
+                            all.iter().map(|(c, _)| rf::short_name(&c.path)).collect();
+                        Err(format!(
+                            "{n} is a member function of {}; call it on an object, like obj.{n}(...)",
+                            owners.join(", ")
+                        ))
+                    }
+                    [] => Err(format!(
+                        "function {n} not found in the asset or the reflection database{}{hint}",
+                        rf::suggest(&db.similar_functions(n, 5))
+                    )),
+                    many => Err(Self::ambiguous(n, many)),
+                }
+            }
+            [class, n] => {
+                let c = match db.named(class) {
+                    [c, ..] => *c,
+                    [] => {
+                        return Err(format!(
+                            "class {class} not found in the reflection database{}",
+                            rf::suggest(&db.similar_types(class, 5))
+                        ))
+                    }
+                };
+                match db.function_nocase(c, n) {
+                    Some(x) => Ok(Some(x)),
+                    None => Err(format!(
+                        "{class} has no function {n}{}",
+                        rf::suggest(&db.similar_members(c, n, 5))
+                    )),
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Checks the arguments against the parameters of a function known from the database.
+    fn check_args(c: &Struct, f: &Func, args: &[Expr]) -> R<()> {
+        let params = rf::call_params(f);
+        if params.len() != args.len() {
+            let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+            return Err(format!(
+                "{}::{} takes {} arguments ({}), not {}",
+                rf::short_name(&c.path),
+                f.name,
+                params.len(),
+                names.join(", "),
+                args.len()
+            ));
+        }
+        for (k, (p, a)) in params.iter().zip(args).enumerate() {
+            let value = matches!(
+                a,
+                Expr::Lit(_)
+                    | Expr::Struct { .. }
+                    | Expr::Call { .. }
+                    | Expr::Text(_)
+                    | Expr::Cast(..)
+                    | Expr::PrimCast(..)
+                    | Expr::Obj(_)
+            );
+            if p.is_out() && value {
+                return Err(format!(
+                    "argument {} ({}) of {} is an out parameter; pass a variable",
+                    k + 1,
+                    p.name,
+                    f.name
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Owner of a member of a typed object, from the database. `None` keeps what the asset
+    /// says; the database decides when the asset knows no owner or one that does not fit.
+    fn db_member_owner(
+        &mut self,
+        name: &str,
+        asset_owner: Option<i32>,
+        env: Env,
+    ) -> R<Option<i32>> {
+        let Some(db) = self.db else { return Ok(None) };
+        let Some(recv) = env.recv.and_then(|r| db.get(&r.path)) else {
+            return Ok(None);
+        };
+        let Some((decl, _)) = db.property_nocase(recv, name) else {
+            return Ok(None);
+        };
+        match asset_owner {
+            Some(o) => match self.db_struct(o) {
+                Some(os) if !db.is_child_of(recv, &os.path) => self.import_struct(decl).map(Some),
+                _ => Ok(None),
+            },
+            None => {
+                let hint = self.db_struct(env.owner_hint);
+                if env.owner_hint != 0 && hint.is_some_and(|s| std::ptr::eq(s, decl)) {
+                    return Ok(Some(env.owner_hint));
+                }
+                self.import_struct(decl).map(Some)
+            }
+        }
+    }
+
+    /// A bare name that the asset does not know: a member of the own class or a class.
+    fn db_bare(&mut self, name: &Name) -> R<Option<KE>> {
+        let Some(db) = self.db else { return Ok(None) };
+        if let Some((decl, _)) = self
+            .db_struct(self.class)
+            .and_then(|s| db.property_nocase(s, &name.text))
+        {
+            let owner = self.import_struct(decl)?;
+            let f = self.fname(name)?;
+            return Ok(Some(Self::var_expr(VarKind::Inst, kptr(owner, vec![f]))));
+        }
+        let r = Ref::Path(vec![name.clone()]);
+        Ok(self.db_object(&r, Want::Any)?.map(|i| {
+            ke!(ExObjectConst {
+                value: PackageIndex::new(i)
+            })
+        }))
+    }
+
+    fn unknown_variable(&self, name: &str, env: Env) -> String {
+        let base =
+            format!("unknown variable {name}; write Owner::{name} for a variable of another class");
+        let Some(db) = self.db else { return base };
+        if let (true, Some(r)) = (env.member, env.recv) {
+            return format!(
+                "{} has no member {name}{}",
+                rf::short_name(&r.path),
+                rf::suggest(&db.similar_members(r, name, 5))
+            );
+        }
+        let mut names = match self.db_struct(self.class) {
+            Some(s) if !env.member => db.similar_members(s, name, 5),
+            _ => vec![],
+        };
+        if names.is_empty() {
+            names = db.similar_types(name, 5);
+        }
+        format!("{base}{}", rf::suggest(&names))
+    }
+
+    fn is_db_enum(&self, n: &Name) -> bool {
+        let Some(db) = self.db else { return false };
+        self.objs
+            .resolve(&Ref::Path(vec![n.clone()]), Want::Any)
+            .iter()
+            .all(|i| self.objs.objs[i].class.ends_with("Enum"))
+            && !db.enums_named(&n.text).is_empty()
+    }
+
+    fn enum_value(&self, e: &str, value: &str) -> R<u8> {
+        let db = self.db.ok_or("no reflection database")?;
+        let en = db.enums_named(e)[0];
+        let short = |n: &'a str| n.rsplit("::").next().unwrap_or(n);
+        match db.enum_value(en, value) {
+            Some(v) => u8::try_from(v).map_err(|_| format!("{e}::{value} is {v}, not a byte")),
+            None => {
+                let values: Vec<&str> = en.values.iter().map(|(n, _)| short(n)).collect();
+                Err(format!(
+                    "{e} has no value {value}; values: {}",
+                    values.join(", ")
+                ))
+            }
+        }
+    }
+
+    fn db_prop(&self, k: &PKey) -> Option<&'a rf::Prop> {
+        let db = self.db?;
+        let owner = self.db_struct(k.0)?;
+        db.property_nocase(owner, &k.1).map(|(_, p)| p)
+    }
+
+    /// Type of a lowered expression according to the database.
+    pub fn recv_of(&self, e: &KE) -> Option<&'a Struct> {
+        self.db?;
+        match e {
+            KE::ExDynamicCast(c) => self.db_struct(c.class_ptr.index),
+            KE::ExSelf(_) => self.db_struct(self.class),
+            KE::ExContext(c) => {
+                self.inner_type(self.recv_of(&c.object_expression), &c.context_expression)
+            }
+            KE::ExContextFailSilent(c) => {
+                self.inner_type(self.recv_of(&c.object_expression), &c.context_expression)
+            }
+            KE::ExStructMemberContext(m) => self.ptr_type(&m.struct_member_expression),
+            KE::ExArrayGetByRef(a) => self.elem_type(&a.array_variable),
+            e => self.inner_type(self.db_struct(self.class), e),
+        }
+    }
+
+    fn inner_type(&self, obj: Option<&'a Struct>, e: &KE) -> Option<&'a Struct> {
+        let db = self.db?;
+        match e {
+            KE::ExCallMath(c) => self.call_type(c.stack_node.index, &c.parameters),
+            KE::ExFinalFunction(c) => self.call_type(c.stack_node.index, &c.parameters),
+            KE::ExLocalFinalFunction(c) => self.call_type(c.stack_node.index, &c.parameters),
+            KE::ExVirtualFunction(c) => {
+                let (_, f) = db.function_nocase(obj?, &fname_text(&c.virtual_function_name))?;
+                self.return_type(f, &c.parameters)
+            }
+            KE::ExLocalVirtualFunction(c) => {
+                let (_, f) = db.function_nocase(obj?, &fname_text(&c.virtual_function_name))?;
+                self.return_type(f, &c.parameters)
+            }
+            e => self.ptr_type(var_ptr(e)?),
+        }
+    }
+
+    fn call_type(&self, f: i32, args: &[KE]) -> Option<&'a Struct> {
+        if let Some(p) = self.info.declared.get(&(f, "ReturnValue".to_string())) {
+            return self.db_struct(fprop_target(p));
+        }
+        let (_, func) = self.db_function_of(f)?;
+        self.return_type(func, args)
+    }
+
+    /// Return type of a call; a class argument of the returned type decides the type, like
+    /// `DeterminesOutputType` (GetGameInstanceSubsystem, GetActorOfClass, ...).
+    fn return_type(&self, f: &'a Func, args: &[KE]) -> Option<&'a Struct> {
+        let db = self.db?;
+        let ret = rf::return_param(f)?;
+        if let rf::Type::Ref(kind, path) = rf::Type::parse(&ret.ty) {
+            if kind == "ObjectProperty" {
+                let class_of = rf::Type::Ref("ClassProperty".into(), path);
+                for (p, a) in rf::call_params(f).iter().zip(args) {
+                    if let (true, KE::ExObjectConst(o)) = (rf::Type::parse(&p.ty) == class_of, a) {
+                        if let Some(s) = self.db_struct(o.value.index) {
+                            return Some(s);
+                        }
+                    }
+                }
+            }
+        }
+        rf::type_target(db, &ret.ty)
+    }
+
+    fn ptr_type(&self, p: &KismetPropertyPointer) -> Option<&'a Struct> {
+        let db = self.db?;
+        let k = pkey(p)?;
+        if let Some(fp) = self.info.declared.get(&k) {
+            return self.db_struct(fprop_target(fp));
+        }
+        rf::type_target(db, &self.db_prop(&k)?.ty)
+    }
+
+    fn elem_type(&self, arr: &KE) -> Option<&'a Struct> {
+        let db = self.db?;
+        let k = dest_ptr(arr).and_then(pkey)?;
+        if let Some(FProperty::FArrayProperty(a)) = self.info.declared.get(&k) {
+            return self.db_struct(fprop_target(&a.inner));
+        }
+        match rf::Type::parse(&self.db_prop(&k)?.ty) {
+            rf::Type::Container(_, inner) => db.get(inner.target()?),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reflection::tests::fixture;
+
+    fn args(src: &str) -> Vec<Expr> {
+        match crate::parse::Parser::new(src).unwrap().expr().unwrap() {
+            Expr::Call { args, .. } => args,
+            e => panic!("not a call: {e:?}"),
+        }
+    }
+
+    #[test]
+    fn arguments_are_checked_against_the_database() {
+        let db = fixture();
+        let i = db.index();
+        let lib = i.get("/Script/Engine.KismetStringLibrary").unwrap();
+        let (c, f) = i.function(lib, "Split").unwrap();
+        let check = |src: &str| Lower::check_args(c, f, &args(src));
+        assert!(check("Split(a, b, l, r, 1u8, 0u8)").is_ok());
+        assert!(check("Split(a, \"b\", o.L, s->R, ESearchCase::IgnoreCase, 0u8)").is_ok());
+        let e = check("Split(a, b)").unwrap_err();
+        assert!(
+            e.contains("takes 6 arguments (SourceString, InStr, LeftS, RightS, SearchCase, SearchDir), not 2"),
+            "{e}"
+        );
+        let e = check("Split(a, b, \"x\", r, 1u8, 0u8)").unwrap_err();
+        assert!(
+            e.contains("argument 3 (LeftS) of Split is an out parameter"),
+            "{e}"
+        );
+        let e = check("Split(a, b, l, GetCommandLine(), 1u8, 0u8)").unwrap_err();
+        assert!(e.contains("argument 4 (RightS)"), "{e}");
     }
 }

@@ -700,10 +700,12 @@ impl<'a> Printer<'a> {
         let pos = env.pos;
         let o = self.expr(obj, Env::at(pos + 1))?;
         let ipos = pos + 1 + self.low.size(obj)? + 12;
+        let recv = self.low.recv_of(obj);
         let i = self.expr(
             inner,
             Env {
                 member: true,
+                recv,
                 ..Env::at(ipos)
             },
         )?;
@@ -919,8 +921,15 @@ impl<'a> Printer<'a> {
 }
 
 pub fn disassemble(a: &Asset) -> R<String> {
+    disassemble_with(a, None)
+}
+
+/// Like [`disassemble`], but leaves out what the reflection database can infer. The text then
+/// needs the same database to assemble.
+pub fn disassemble_with(a: &Asset, db: Option<&crate::reflection::Index>) -> R<String> {
     let funcs = functions(a);
     let mut p = Printer::new(a);
+    p.low.db = db;
     let mut targets: BTreeMap<i32, BTreeSet<u32>> = BTreeMap::new();
     let mut offs_of: HashMap<i32, Vec<u32>> = HashMap::new();
     for f in &funcs {

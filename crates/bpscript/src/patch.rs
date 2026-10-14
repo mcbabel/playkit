@@ -866,6 +866,15 @@ fn import_lines(report: &mut String, imports: &[unreal_asset::Import]) {
 }
 
 pub fn apply(a: &mut Asset, src: &str) -> crate::Result<String> {
+    apply_with(a, src, None)
+}
+
+/// Like [`apply`], with a reflection database for names the asset does not contain.
+pub fn apply_with(
+    a: &mut Asset,
+    src: &str,
+    db: Option<&crate::reflection::Index>,
+) -> crate::Result<String> {
     let items = crate::parse::parse(src)?;
     let mut report = String::new();
     let class = main_class(a)?;
@@ -887,7 +896,7 @@ pub fn apply(a: &mut Asset, src: &str) -> crate::Result<String> {
     }
 
     let (mut plan, new_imports) = {
-        let mut low = Lower::new(a, true);
+        let mut low = Lower::new(a, true).with_db(db);
         for r in &imports {
             low.object(r, Want::Any)?;
         }
@@ -929,7 +938,7 @@ pub fn apply(a: &mut Asset, src: &str) -> crate::Result<String> {
     }
 
     let (results, more_imports) = {
-        let mut low = Lower::new(a, true);
+        let mut low = Lower::new(a, true).with_db(db);
         let results = generate(&mut low, &mut plan, uber, &new_index, &mut report)?;
         (results, low.objs.new_imports)
     };

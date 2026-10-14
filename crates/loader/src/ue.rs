@@ -24,11 +24,6 @@ pub const FPROPERTY_EXTRA: usize = 0x78;
 pub const FFRAME_NODE: usize = 0x10;
 pub const FFRAME_LOCALS: usize = 0x28;
 
-pub const CPF_PARM: u64 = 0x80;
-pub const CPF_OUT_PARM: u64 = 0x100;
-pub const CPF_RETURN_PARM: u64 = 0x400;
-pub const FUNC_STATIC: u32 = 0x2000;
-
 pub struct Engine {
     name_blocks: usize,
     objects: usize,
@@ -192,7 +187,7 @@ impl Engine {
         while c != 0 {
             let mut f: usize = unsafe { rd(c + USTRUCT_CHILDREN) };
             while f != 0 {
-                if self.object_name(f) == name {
+                if self.object_name(f).eq_ignore_ascii_case(name) {
                     return f;
                 }
                 f = unsafe { rd(f + UFIELD_NEXT) };
@@ -238,7 +233,7 @@ impl Engine {
         let mut c = s;
         while c != 0 {
             for p in self.properties(c) {
-                if self.property_name(p) == name {
+                if self.property_name(p).eq_ignore_ascii_case(name) {
                     return p;
                 }
             }

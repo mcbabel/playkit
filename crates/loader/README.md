@@ -31,7 +31,7 @@ Both functions are found by byte patterns in the running game. The list of loose
 
 ## Native C++ mods
 
-Besides loose files, the loader runs mods written in C or C++. A native mod is a DLL in `<Game>/<Project>/Binaries/Win64/mods/` that exports one function:
+Besides loose files, the loader runs mods written in C or C++. A native mod is a DLL in `<Game>/<Project>/Binaries/Win64/playkit-mods/` that exports one function. (Not `Mods`: that folder belongs to UE4SS, and Windows does not tell the two names apart.)
 
 ```cpp
 #include "playkit.hpp"
@@ -69,10 +69,14 @@ Mods are loaded on the game thread at the first Blueprint call, after the engine
 
 Create an empty file `playkit-sdk.request` next to the game executable while the game runs. A few seconds later the loader writes `playkit-sdk/` there with:
 
-- `playkit_sdk.hpp`: every loaded class, struct and enum as C++ types at their real offsets, plus typed wrappers for every function, e.g. `sdk::AActor::K2_GetActorLocation()`. Include it instead of `playkit.hpp`.
-- `reflection.json`: the same information as data (paths, sizes, property types and offsets, function flags and parameters), for tools.
+- `reflection.json`: every class, struct and enum the game has loaded so far, as data (paths, sizes, property types and offsets, function flags and parameters). Each request adds what is new, so requests from several sessions add up: request once in the main menu, once in a lobby, once in a round, and the database covers all of it. [bpscript](../bpscript) uses it to resolve names.
+- `playkit_sdk.hpp`: the whole database as C++ types at their real offsets, plus typed wrappers for every function, e.g. `sdk::AActor::K2_GetActorLocation()`. Include it instead of `playkit.hpp`.
 
-Only what is loaded at that moment is included. Blueprint classes appear once the game has used them, so request the SDK after visiting the screens you want to mod.
+Blueprint classes appear once the game has used them, so request the SDK after visiting the screens you want to mod. Easier: write `watch` into `playkit-sdk.request`. The file then stays, and the loader updates the database by itself whenever the game has loaded a lot of new content, for example after every map change. Just play through the parts you care about.
+
+To cover the whole game without playing, write `all` into `playkit-sdk.request` and list object paths in `playkit-sdk.load` (one per line, like `/Game/Base/GM_Escape.GM_Escape`). The loader loads them in batches of 150 and updates the database after each batch. If an asset crashes the game, start it again: the loader remembers where it stopped (`playkit-sdk.progress`), adds that asset to `playkit-sdk.skip` and continues after it.
+
+The header can also be generated on any machine from a database with `playkit-sdk gen reflection.json` ([crates/reflect](../reflect)).
 
 **Engine structures:**
 

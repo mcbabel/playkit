@@ -18,6 +18,8 @@ bpscript patch <in.uasset> <mod.bps> <out.uasset>
 bpscript roundtrip <dir> [--limit N] [--keep DIR]
 ```
 
+Global option: `--reflection <file>` (see [Reflection database](#reflection-database)).
+
 `asm` and `patch` read the `.uexp` next to the input and write both files.
 `asm` replaces the bytecode of every function that appears in the text;
 functions left out keep their code. `roundtrip` runs dis and asm on every asset
@@ -185,6 +187,7 @@ private match lobby), `examples/invite_gi.bps` of `pminvitegi`.
 1. `cargo build --release -p bpscript`
 2. `toolchain/uatool/target/release/uatool pmscreen2 pakex/orig/Playtime_Multiplayer/Content/Interface/MatchMaking/UI_MatchMakingScreen.uasset <work>/pm2.uasset`
 3. `bpscript patch <work>/pm2.uasset crates/bpscript/examples/invite.bps <work>/UI_MatchMakingScreen.uasset`
+   (or `examples/invite_short.bps` with `--reflection <reflection.json>`)
 4. `bpscript patch pakex/orig/Playtime_Multiplayer/Content/Base/MultiplayerGameInstance.uasset crates/bpscript/examples/invite_gi.bps <work>/MultiplayerGameInstance.uasset`
    (or keep the GameInstance from the current mod set if it already has `PM_InviteCmdDone`).
 5. Back up the installed loose files, then install both outputs (`.uasset` and
@@ -202,17 +205,89 @@ Differences to the uatool result (same new functions, locals and imports):
 calls to `SetVisibility` are virtual instead of final, contexts on `GetParent()`
 have no r-value property, the parameter copies are called `PM_InviteRequest_Data`
 instead of `MP_PM_InviteRequest_Data`, uatool's debug-only imports and the unused
-`BooleanAND` import are missing.
+`BooleanAND` import are missing, and `K2_SetTimer` gets all six arguments like in
+compiled code.
+
+## Reflection database
+
+With the game's reflection database, new code needs far fewer full paths,
+imports and annotations.
+
+**Where it comes from.** The Playkit loader writes it. While the game runs,
+create an empty file `playkit-sdk.request` next to the game exe
+(`Playtime_Multiplayer/Binaries/Win64/`). The loader then writes
+`playkit-sdk/reflection.json` there and merges it with the file from earlier
+sessions, so classes that were loaded only in other sessions are kept.
+
+**How to pass it.** `asm`, `patch` and `roundtrip` take the global option
+`--reflection <file>`; without it they use the environment variable
+`PLAYKIT_REFLECTION`. `dis` does not need it.
+
+**Asset first.** The database is only asked when the asset itself cannot
+resolve a name, or has no evidence for a choice (an import that is never
+called, a property that is never assigned). Text printed by `dis` assembles to
+the same bytes with and without the database; `roundtrip --reflection` checks
+that.
+
+**What it resolves:**
+
+- Calls by short name: `PrintString(self, "x", true, true, LinearColor{...}, 2.0)`
+  or `KismetSystemLibrary::PrintString(...)`, without `import`. A bare call looks
+  at the own class first, then at static functions of the whole database. When
+  several fit (also after comparing the argument count), the error lists them
+  and `Class::Func` picks one. The import of the function, its class and its
+  package (`/Script/Engine`, ...) is created.
+- The call token the Kismet compiler emits, from the function flags (checked
+  against the bytecode of the game): static native functions are math calls,
+  except wildcard functions (`Array_*`, `Map_*`, `Set_*`,
+  `GetDataTableRowFromName`, `SetStructurePropertyByName`) and
+  `BlueprintAuthorityOnly`/`BlueprintCosmetic` ones such as
+  `GetAllWidgetsOfClass`. Those run on the class default object: a bare
+  `Array_Get(...)` becomes `Default__KismetArrayLibrary.Array_Get(...)`.
+  Member functions are final calls when they are `Final`, otherwise virtual
+  calls by name (no import); Blueprint functions that are not network
+  functions use the `local` variants.
+- Arguments: the count must match the parameters, and out parameters need a
+  variable (also a member, struct member or array element), not a value.
+- Members of typed expressions. Types come from casts, return values (for
+  functions like `GetGameInstanceSubsystem(self, Friends)` the class argument),
+  property types and declared locals:
+  `cast<MultiplayerGameInstance_C>(GetGameInstance(self)).CurrentLobby` needs no
+  `Owner::`, and `SlotAsOverlaySlot(x).SetPadding(...)` calls
+  `OverlaySlot:SetPadding` even when the asset imports `VerticalBoxSlot:SetPadding`.
+- Bare names: inherited properties of the own class, classes (`Friends`,
+  `UI_MainMenu_C`) and default objects (`Default__KismetSystemLibrary`).
+- Types in patch declarations and struct literals by short name with their size:
+  `struct<JoinLobbyData>`, `object<UserWidget>`, `Margin{72.0, 100.0, 0.0, 0.0}`,
+  `Vector2D{2.3, 2.3}`, and struct members like `Data.SteamIDLobby`.
+- Delegate signatures: `delegate<OnGameLobbyJoinRequested__DelegateSignature>`,
+  `delegate<UI_InvitePlayerButton_C::ButtonRelease__DelegateSignature>` when
+  several classes declare one with that name.
+- Enum values: `ESlateVisibility::Collapsed` or
+  `EHorizontalAlignment::HAlign_Left` become the byte constant.
+- The assignment token of database properties (`letbool` for a bool, ...).
+- Errors name what was not found and suggest close names:
+  `UI_InvitePlayerButton_C has no function SetVisibilty; did you mean SetVisibility, ...?`.
+
+Names compare without case, like Unreal names. `examples/invite_short.bps` is
+`examples/invite.bps` written this way; applied with the game's database both
+give the same code.
+
+Not covered: interface calls, output types of functions without a class
+argument (`DeterminesOutputType` metadata is not in the database), and the
+`X = [];` the compiler puts before native calls with array out parameters
+(write it yourself when it matters). The database only knows classes that were
+loaded when it was written.
 
 ## Limits
 
 - UE 4.27 cooked assets (field path properties, 32 bit float constants).
 - Assets that unreal_asset cannot load or re-save unchanged are not supported
   (a few widgets with MovieScene data in this game).
-- Types of imported functions and properties are unknown. Unused imported
-  functions are inferred as math calls without a context and final calls with
-  one; unknown members need `Owner::Name` unless the left side has a known type
-  (declared variable, `self`, `cast<...>`).
+- Without a reflection database, types of imported functions and properties
+  are unknown. Unused imported functions are inferred as math calls without a
+  context and final calls with one; unknown members need `Owner::Name` unless
+  the left side has a known type (declared variable, `self`, `cast<...>`).
 - `before` needs a first statement of at least 5 bytes, `after` a return that is
   reachable through a jump or a large enough statement before it. A function
   that jumps back to its first statement runs a `before` hook again.

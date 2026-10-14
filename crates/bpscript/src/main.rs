@@ -1,4 +1,5 @@
-use bpscript::{assemble, disassemble, load, save, Files};
+use bpscript::reflection::{self, Db, Index};
+use bpscript::{assemble_with, disassemble, load, save, Files};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -7,15 +8,43 @@ const USAGE: &str = "usage:
   bpscript dis <asset.uasset|.umap> [out.bps]
   bpscript asm <asset> <in.bps> <out.uasset>
   bpscript patch <in.uasset> <mod.bps> <out.uasset>
-  bpscript roundtrip <dir> [--limit N] [--keep DIR]";
+  bpscript roundtrip <dir> [--limit N] [--keep DIR]
+options:
+  --reflection <file>  reflection database (playkit-sdk/reflection.json) for names the
+                       asset does not contain; default: env PLAYKIT_REFLECTION";
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let mut db_arg = None;
+    if let Some(k) = args.iter().position(|a| a == "--reflection") {
+        if k + 1 >= args.len() {
+            eprintln!("--reflection needs a file\n{USAGE}");
+            return ExitCode::FAILURE;
+        }
+        db_arg = Some(args.remove(k + 1));
+        args.remove(k);
+    }
+    let needs_db = matches!(
+        args.first().map(String::as_str),
+        Some("asm" | "patch" | "roundtrip")
+    );
+    let db = match reflection::path_from(db_arg.as_deref()).filter(|_| needs_db) {
+        Some(p) => match reflection::load(&p) {
+            Ok(db) => Some(db),
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
+    let index = db.as_ref().map(Db::index);
+    let db = index.as_ref();
     let r = match args.first().map(String::as_str) {
         Some("dis") if args.len() == 2 || args.len() == 3 => dis(&args[1], args.get(2)),
-        Some("asm") if args.len() == 4 => asm(&args[1], &args[2], &args[3]),
-        Some("patch") if args.len() == 4 => patch(&args[1], &args[2], &args[3]),
-        Some("roundtrip") if args.len() >= 2 => roundtrip(&args[1..]),
+        Some("asm") if args.len() == 4 => asm(&args[1], &args[2], &args[3], db),
+        Some("patch") if args.len() == 4 => patch(&args[1], &args[2], &args[3], db),
+        Some("roundtrip") if args.len() >= 2 => roundtrip(&args[1..], db),
         _ => Err(USAGE.to_string()),
     };
     match r {
@@ -48,19 +77,20 @@ fn write_out(a: &bpscript::Asset, out: &str) -> Result<(), String> {
     f.write(Path::new(out)).map_err(|e| format!("{out}: {e}"))
 }
 
-fn asm(input: &str, src: &str, out: &str) -> Result<(), String> {
+fn asm(input: &str, src: &str, out: &str, db: Option<&Index>) -> Result<(), String> {
     let mut a = load(&read(input)?).map_err(|e| e.to_string())?;
     let text = std::fs::read_to_string(src).map_err(|e| format!("{src}: {e}"))?;
-    let n = assemble(&mut a, &text).map_err(|e| format!("{src}: {e}"))?;
+    let n = assemble_with(&mut a, &text, db).map_err(|e| format!("{src}: {e}"))?;
     write_out(&a, out)?;
     println!("{n} functions assembled; written: {out}");
     Ok(())
 }
 
-fn patch(input: &str, src: &str, out: &str) -> Result<(), String> {
+fn patch(input: &str, src: &str, out: &str, db: Option<&Index>) -> Result<(), String> {
     let mut a = load(&read(input)?).map_err(|e| e.to_string())?;
     let text = std::fs::read_to_string(src).map_err(|e| format!("{src}: {e}"))?;
-    let report = bpscript::patch::apply(&mut a, &text).map_err(|e| format!("{src}: {e}"))?;
+    let report =
+        bpscript::patch::apply_with(&mut a, &text, db).map_err(|e| format!("{src}: {e}"))?;
     write_out(&a, out)?;
     print!("{report}");
     println!("written: {out}");
@@ -140,7 +170,7 @@ fn first_difference(orig: &bpscript::Asset, new: &bpscript::Asset) -> String {
     "bytes differ outside the bytecode".into()
 }
 
-fn check(path: &Path, rel: &str, keep: Option<&Path>) -> Outcome {
+fn check(path: &Path, rel: &str, keep: Option<&Path>, db: Option<&Index>) -> Outcome {
     let files = match Files::read(path) {
         Ok(f) => f,
         Err(e) => return Outcome::Unreadable(e.to_string()),
@@ -170,7 +200,7 @@ fn check(path: &Path, rel: &str, keep: Option<&Path>) -> Outcome {
             let _ = std::fs::write(k.join(name), &text);
         }
         let mut a = load(&files).map_err(|e| e.to_string())?;
-        assemble(&mut a, &text).map_err(|e| format!("asm: {e}"))?;
+        assemble_with(&mut a, &text, db).map_err(|e| format!("asm: {e}"))?;
         let out = save(&a).map_err(|e| format!("save: {e}"))?;
         if out.uasset == files.uasset && out.uexp == files.uexp {
             return Ok(None);
@@ -186,7 +216,7 @@ fn check(path: &Path, rel: &str, keep: Option<&Path>) -> Outcome {
     }
 }
 
-fn roundtrip(args: &[String]) -> Result<(), String> {
+fn roundtrip(args: &[String], db: Option<&Index>) -> Result<(), String> {
     let dir = Path::new(&args[0]);
     let mut limit = usize::MAX;
     let mut keep = None;
@@ -221,7 +251,7 @@ fn roundtrip(args: &[String]) -> Result<(), String> {
             break;
         }
         let rel = p.strip_prefix(dir).unwrap_or(p).display().to_string();
-        match check(p, &rel, keep.as_deref()) {
+        match check(p, &rel, keep.as_deref(), db) {
             Outcome::Same => same += 1,
             Outcome::Failed(why) => {
                 failed += 1;
@@ -248,6 +278,9 @@ fn roundtrip(args: &[String]) -> Result<(), String> {
     } else {
         100.0
     };
+    if db.is_some() {
+        println!("reflection database:          used by asm");
+    }
     println!("assets scanned:               {}", files.len());
     println!("without bytecode:             {nocode}");
     println!("not loadable by unreal_asset: {unreadable}");

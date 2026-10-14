@@ -1,4 +1,4 @@
-/* Playkit native mod API (C). A mod is a DLL in <Game>/Binaries/Win64/mods/ that exports
+/* Playkit native mod API (C). A mod is a DLL in <Game>/Binaries/Win64/playkit-mods/ that exports
    int playkit_mod_init(const PkApi* api), called once on the game thread when the engine runs.
    Return 0 on success. */
 #ifndef PLAYKIT_H

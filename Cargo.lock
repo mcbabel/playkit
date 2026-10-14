@@ -395,6 +395,7 @@ version = "0.2.1"
 dependencies = [
  "ordered-float",
  "playkit-merge",
+ "playkit-reflect",
  "thiserror 2.0.21",
  "unreal_asset",
 ]
@@ -2984,6 +2985,7 @@ name = "playkit-loader"
 version = "0.2.1"
 dependencies = [
  "iced-x86",
+ "playkit-reflect",
  "windows-sys 0.59.0",
 ]
 
@@ -3001,6 +3003,14 @@ version = "0.2.1"
 dependencies = [
  "clap",
  "playkit-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "playkit-reflect"
+version = "0.2.1"
+dependencies = [
  "serde",
  "serde_json",
 ]

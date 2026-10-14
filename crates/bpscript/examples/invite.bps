@@ -90,7 +90,7 @@ before Construct ubergraph {
     bind(PM_InvDelReq, self, PM_InviteRequest);
     GetGameInstanceSubsystem(self, Friends).Friends::GameLobbyJoinRequested += PM_InvDelReq;
     if !Not_PreBool(cast<MultiplayerGameInstance_C>(GetGameInstance(self)).PM_InviteCmdDone) goto construct_end;
-    K2_SetTimer(self, "PM_InviteCmd", 2.0, false);
+    K2_SetTimer(self, "PM_InviteCmd", 2.0, false, 0.0, 0.0);
 construct_end:
 }
 

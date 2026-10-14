@@ -1,4 +1,4 @@
-//! Native mods: DLLs in `<Binaries>/mods/` that export `playkit_mod_init(const PkApi*)`.
+//! Native mods: DLLs in `<Binaries>/playkit-mods/` that export `playkit_mod_init(const PkApi*)`.
 
 use crate::script::HookFn;
 use crate::ue;
@@ -196,6 +196,7 @@ static API: PkApi = PkApi {
 
 static STATE: AtomicU8 = AtomicU8::new(0);
 static CALLS: AtomicU32 = AtomicU32::new(0);
+static LAST_SDK_CHECK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 type InitFn = unsafe extern "C" fn(*const PkApi) -> i32;
 
@@ -213,8 +214,12 @@ pub fn on_script() {
     if n.is_multiple_of(64) {
         crate::script::resolve_pending();
     }
-    if n.is_multiple_of(20000) {
-        crate::sdk::check_request();
+    if n.is_multiple_of(64) {
+        let now = unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount64() };
+        if now.saturating_sub(LAST_SDK_CHECK.load(Ordering::Relaxed)) >= 2000 {
+            LAST_SDK_CHECK.store(now, Ordering::Relaxed);
+            crate::sdk::check_request();
+        }
     }
 }
 
@@ -224,7 +229,7 @@ fn start() {
         return;
     };
     crate::log::write(&format!("engine ready: {} objects", engine.num_objects()));
-    let Some(dir) = crate::loose::exe_dir().map(|d| d.join("mods")) else {
+    let Some(dir) = crate::loose::exe_dir().map(|d| d.join("playkit-mods")) else {
         return;
     };
     let Ok(entries) = std::fs::read_dir(&dir) else {

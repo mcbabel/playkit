@@ -4,6 +4,7 @@ pub mod names;
 pub mod parse;
 pub mod patch;
 pub mod print;
+pub mod reflection;
 
 use ast::{Function, Stmt};
 use lower::{ke, Lower, KE};
@@ -197,6 +198,11 @@ pub fn compile(low: &mut Lower, funcs: &[Function]) -> std::result::Result<Compi
 }
 
 pub fn assemble(a: &mut Asset, src: &str) -> Result<usize> {
+    assemble_with(a, src, None)
+}
+
+/// Like [`assemble`], with a reflection database for names the asset does not contain.
+pub fn assemble_with(a: &mut Asset, src: &str, db: Option<&reflection::Index>) -> Result<usize> {
     let items = parse::parse(src)?;
     let mut funcs = vec![];
     let mut imports = vec![];
@@ -212,7 +218,7 @@ pub fn assemble(a: &mut Asset, src: &str) -> Result<usize> {
         }
     }
     let (compiled, new_imports) = {
-        let mut low = Lower::new(a, true);
+        let mut low = Lower::new(a, true).with_db(db);
         for r in &imports {
             low.object(r, Want::Any)?;
         }

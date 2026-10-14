@@ -384,6 +384,42 @@ impl Objects {
             .map(|o| o.class_package.clone())
     }
 
+    /// Finds the import with these path segments or creates it with the given class. The outer
+    /// object must exist already, except for a package.
+    pub fn ensure(
+        &mut self,
+        a: &Asset,
+        segs: &[String],
+        class: &str,
+        class_package: &str,
+    ) -> Result<i32, String> {
+        let found = self.by_segments(segs, true, Some(true));
+        if let Some(i) = found
+            .iter()
+            .find(|i| self.objs[i].class == class)
+            .or(found.first())
+        {
+            return Ok(*i);
+        }
+        let outer = match segs.len() {
+            0 => return Err("empty path".into()),
+            1 => 0,
+            2 => self.ensure(a, &segs[..1], "Package", "/Script/CoreUObject")?,
+            n => *self
+                .by_segments(&segs[..n - 1], true, Some(true))
+                .first()
+                .ok_or_else(|| format!("{} is not imported", join_path(&segs[..n - 1])))?,
+        };
+        let imp = Import::new(
+            make_fname(a, &Name::new(class_package)),
+            make_fname(a, &Name::new(class)),
+            PackageIndex::new(outer),
+            make_fname(a, &Name::new(segs[segs.len() - 1].clone())),
+            false,
+        );
+        Ok(self.add_import(imp))
+    }
+
     pub fn create(&mut self, a: &Asset, r: &Ref, want: Want) -> Result<i32, String> {
         let Ref::Quoted { class, path } = r else {
             return Err(format!(

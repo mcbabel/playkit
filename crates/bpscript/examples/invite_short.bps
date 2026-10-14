@@ -1,0 +1,134 @@
+// Private Match: invite Steam friends from the private match lobby.
+//
+// The same mod as invite.bps, written for the reflection database: no import
+// block, no Owner:: prefixes, struct sizes and enum values from the database.
+//
+//   bpscript patch pm2.uasset invite_short.bps out.uasset \
+//       --reflection <game>/Playtime_Multiplayer/Binaries/Win64/playkit-sdk/reflection.json
+//
+// The GameInstance needs the PM_InviteCmdDone flag (invite_gi.bps).
+
+// Ubergraph state shared by the events below.
+local ExecuteUbergraph_UI_MatchMakingScreen::PM_InvLobby: struct<SteamID>;
+local ExecuteUbergraph_UI_MatchMakingScreen::PM_InvMenus: array<object<UserWidget>>;
+local ExecuteUbergraph_UI_MatchMakingScreen::PM_InvMenu: object<UserWidget>;
+local ExecuteUbergraph_UI_MatchMakingScreen::PM_InvJoin: object<SteamCoreMatchmakingAsyncActionJoinLobby>;
+local ExecuteUbergraph_UI_MatchMakingScreen::PM_InvFree: int;
+local ExecuteUbergraph_UI_MatchMakingScreen::PM_InvL: string;
+local ExecuteUbergraph_UI_MatchMakingScreen::PM_InvR: string;
+local ExecuteUbergraph_UI_MatchMakingScreen::PM_InvId: string;
+local ExecuteUbergraph_UI_MatchMakingScreen::PM_InvRest: string;
+local ExecuteUbergraph_UI_MatchMakingScreen::PM_InvDelBtn: delegate<UI_InvitePlayerButton_C::ButtonRelease__DelegateSignature>;
+local ExecuteUbergraph_UI_MatchMakingScreen::PM_InvDelReq: delegate<OnGameLobbyJoinRequested__DelegateSignature>;
+local ExecuteUbergraph_UI_MatchMakingScreen::PM_InvDelJoin: delegate<OnJoinLobbyAsyncDelegate__DelegateSignature>;
+
+// Construct: wire the invite buttons and the Steam join request, check the
+// +connect_lobby start parameter once per game start.
+before Construct ubergraph {
+    bind(PM_InvDelBtn, self, PM_InviteClick);
+    InvitePlayer1.ButtonRelease += PM_InvDelBtn;
+    InvitePlayer2.ButtonRelease += PM_InvDelBtn;
+    InvitePlayer3.ButtonRelease += PM_InvDelBtn;
+    InvitePlayer4.ButtonRelease += PM_InvDelBtn;
+    InvitePlayer5.ButtonRelease += PM_InvDelBtn;
+    InvitePlayer6.ButtonRelease += PM_InvDelBtn;
+    SlotAsOverlaySlot(InvitePlayer1.GetParent()).SetPadding(Margin{72.0, 100.0, 0.0, 0.0});
+    SlotAsOverlaySlot(InvitePlayer1.GetParent()).SetHorizontalAlignment(EHorizontalAlignment::HAlign_Left);
+    SlotAsOverlaySlot(InvitePlayer1.GetParent()).SetVerticalAlignment(EVerticalAlignment::VAlign_Top);
+    InvitePlayer1.GetParent().SetRenderTransformPivot(Vector2D{0.0, 0.0});
+    InvitePlayer1.GetParent().SetRenderScale(Vector2D{2.3, 2.3});
+    bind(PM_InvDelReq, self, PM_InviteRequest);
+    GetGameInstanceSubsystem(self, Friends).GameLobbyJoinRequested += PM_InvDelReq;
+    if !Not_PreBool(cast<MultiplayerGameInstance_C>(GetGameInstance(self)).PM_InviteCmdDone) goto construct_end;
+    K2_SetTimer(self, "PM_InviteCmd", 2.0, false, 0.0, 0.0);
+construct_end:
+}
+
+// The invite row (RefreshPlayerInviteButtons runs every second): only in the
+// private match lobby. Members as avatars, one free slot as "+".
+after RefreshPlayerInviteButtons ubergraph {
+    if !UI_MatchmakingStatus.PrivateMatch goto row_off;
+    if !Greater_IntInt(GetNumLobbyMembers(cast<MultiplayerGameInstance_C>(GetGameInstance(self)).CurrentLobby), 0) goto row_off;
+    InvitePlayer1.GetParent().SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+    PM_InvFree = Subtract_IntInt(GetNumLobbyMembers(cast<MultiplayerGameInstance_C>(GetGameInstance(self)).CurrentLobby), 1);
+    if !EqualEqual_IntInt(PM_InvFree, 0) goto row_1;
+    InvitePlayer1.SetVisibility(ESlateVisibility::Visible);
+    InvitePlayer1.PlayerIcon.SetVisibility(ESlateVisibility::Hidden);
+row_1:
+    if !EqualEqual_IntInt(PM_InvFree, 1) goto row_2;
+    InvitePlayer2.SetVisibility(ESlateVisibility::Visible);
+    InvitePlayer2.PlayerIcon.SetVisibility(ESlateVisibility::Hidden);
+row_2:
+    if !EqualEqual_IntInt(PM_InvFree, 2) goto row_3;
+    InvitePlayer3.SetVisibility(ESlateVisibility::Visible);
+    InvitePlayer3.PlayerIcon.SetVisibility(ESlateVisibility::Hidden);
+row_3:
+    if !EqualEqual_IntInt(PM_InvFree, 3) goto row_4;
+    InvitePlayer4.SetVisibility(ESlateVisibility::Visible);
+    InvitePlayer4.PlayerIcon.SetVisibility(ESlateVisibility::Hidden);
+row_4:
+    if !EqualEqual_IntInt(PM_InvFree, 4) goto row_5;
+    InvitePlayer5.SetVisibility(ESlateVisibility::Visible);
+    InvitePlayer5.PlayerIcon.SetVisibility(ESlateVisibility::Hidden);
+row_5:
+    if !EqualEqual_IntInt(PM_InvFree, 5) goto row_done;
+    InvitePlayer6.SetVisibility(ESlateVisibility::Visible);
+    InvitePlayer6.PlayerIcon.SetVisibility(ESlateVisibility::Hidden);
+row_done:
+    return;
+row_off:
+    InvitePlayer1.GetParent().SetVisibility(ESlateVisibility::Collapsed);
+}
+
+// Click on "+" (or an avatar without a player): Steam overlay "invite
+// friends", without the overlay the Steam friends list.
+event PM_InviteClick() {
+    if !Greater_IntInt(GetNumLobbyMembers(cast<MultiplayerGameInstance_C>(GetGameInstance(self)).CurrentLobby), 0) goto click_end;
+    if !IsOverlayEnabled() goto click_no_overlay;
+    ActivateGameOverlayInvitedialog(cast<MultiplayerGameInstance_C>(GetGameInstance(self)).CurrentLobby);
+    return;
+click_no_overlay:
+    LaunchURL("steam://open/friends");
+click_end:
+}
+
+// Steam: a friend clicked "Join" while the game runs.
+event PM_InviteRequest(Data: const ref struct<GameLobbyJoinRequested>) {
+    PM_InvLobby = Data.SteamIDLobby;
+    goto join;
+}
+
+// Start parameter +connect_lobby <id> (once per game start), then join.
+event PM_InviteCmd() {
+    if !Not_PreBool(cast<MultiplayerGameInstance_C>(GetGameInstance(self)).PM_InviteCmdDone) goto join_end;
+    cast<MultiplayerGameInstance_C>(GetGameInstance(self)).PM_InviteCmdDone = true;
+    if !Split(GetCommandLine(), "+connect_lobby", PM_InvL, PM_InvR, ESearchCase::IgnoreCase, ESearchDir::FromStart) goto join_end;
+    PM_InvR = Trim(PM_InvR);
+    PM_InvId = PM_InvR;
+    Split(PM_InvR, " ", PM_InvId, PM_InvRest, ESearchCase::IgnoreCase, ESearchDir::FromStart);
+    PM_InvLobby = MakeSteamID(PM_InvId);
+join:
+    // Join only outside of any lobby and only from the main menu.
+    if !Greater_IntInt(GetNumLobbyMembers(cast<MultiplayerGameInstance_C>(GetGameInstance(self)).CurrentLobby), 0) goto join_go;
+    goto join_end;
+join_go:
+    GetAllWidgetsOfClass(self, PM_InvMenus, UI_MainMenu_C, false);
+    PM_InvMenu = none;
+    Array_Get(PM_InvMenus, 0, PM_InvMenu);
+    if !KismetSystemLibrary::IsValid(PM_InvMenu) goto join_end;
+    PM_InvMenu.BndEvt__UI_MainMenu_UI_PrivateMatch_K2Node_ComponentBoundEvent_5_ButtonPressed__DelegateSignature();
+    PM_InvJoin = JoinLobbyAsync(self, PM_InvLobby, 10.0);
+    if !KismetSystemLibrary::IsValid(PM_InvJoin) goto join_end;
+    bind(PM_InvDelJoin, self, PM_InviteJoined);
+    PM_InvJoin.OnCallback += PM_InvDelJoin;
+    PM_InvJoin.Activate();
+join_end:
+}
+
+// Join result: only a success goes to the GameInstance (like after the code
+// search), its failure branch keeps searching otherwise.
+event PM_InviteJoined(Data: const ref struct<JoinLobbyData>, bWasSuccessful: bool) {
+    if !bWasSuccessful goto joined_end;
+    cast<MultiplayerGameInstance_C>(GetGameInstance(self)).OnCallback_A4A94D6E4B7ACAF4C349EA9985A97BE7(Data, true);
+joined_end:
+}
