@@ -1,4 +1,5 @@
 pub mod anticheat;
+pub mod diagnose;
 pub mod fsx;
 pub mod game;
 pub mod index;

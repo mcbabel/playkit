@@ -492,6 +492,47 @@ function lastRunInfo(run) {
   );
 }
 
+const DIAG = { ok: ["good", "check"], info: ["info", "box"], warn: ["warn", "warn"], bad: ["bad", "warn"] };
+
+function runDiagnosis() {
+  return run("diagnose", "Checking", async () => {
+    app.diagnosis = await invoke("diagnose");
+  });
+}
+
+function copyDiagnosis() {
+  const text = app.diagnosis?.text || "";
+  navigator.clipboard.writeText(text).then(() => toast("Report copied", "ok"), () => toast("Copy failed, select the text below instead", "error"));
+}
+
+function diagnosePanel() {
+  const d = app.diagnosis;
+  const busy = app.busy.has("diagnose");
+  return el(
+    "div",
+    { class: "panel" },
+    el("h2", { text: "Mods do not show up in the game?" }),
+    el("p", { class: "hint", text: "Run the check while the game is running and in the main menu: Playkit then also sees which dxgi.dll the game really loaded. Send the copied report to whoever helps you." }),
+    el(
+      "div",
+      { class: "inline" },
+      el("button", { class: "btn btn-accent", disabled: busy, onclick: runDiagnosis, text: busy ? "Checking…" : d ? "Check again" : "Run check" }),
+      d ? el("button", { class: "btn btn-ghost", onclick: copyDiagnosis, text: "Copy report" }) : null
+    ),
+    d
+      ? el(
+          "div",
+          { class: "diag" },
+          d.checks.map((c) => {
+            const [cls, ic] = DIAG[c.level] || DIAG.info;
+            return el("div", { class: "check" }, el("span", { class: `check-icon ${cls}` }, icon(ic, 16)), el("span", {}, el("b", { text: `${c.title}: ` }), c.detail));
+          })
+        )
+      : null,
+    d ? el("details", { class: "lastrun" }, el("summary", { text: "Report as text" }), el("div", { class: "code", text: d.text })) : null
+  );
+}
+
 function renderSetup() {
   const s = app.status;
   if (!s) return [el("h1", { text: "Game setup" })];
@@ -551,6 +592,7 @@ function renderSetup() {
       s.game_running ? el("span", { class: "warn", text: "Close the game first." }) : null,
       dll && dll !== "missing" ? el("button", { class: "btn btn-danger", disabled: s.game_running, onclick: removeLoader, text: "Remove loader" }) : null
     ),
+    diagnosePanel(),
     el(
       "div",
       { class: "panel" },

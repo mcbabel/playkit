@@ -23,6 +23,7 @@ fn main() {
             commands::pack,
             commands::open_url,
             commands::reveal,
+            commands::diagnose,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Playkit");

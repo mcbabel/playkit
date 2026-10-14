@@ -4,7 +4,7 @@ use playkit_core::index::{self, Index, Mod};
 use playkit_core::install::{self, Health, State};
 use playkit_core::loader::{self, Bundled};
 use playkit_core::platform::{self, Platform};
-use playkit_core::{anticheat, package, steam, APP_ID};
+use playkit_core::{anticheat, diagnose, package, steam, APP_ID};
 use serde::Serialize;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -121,6 +121,21 @@ pub async fn status(state: Tauri<'_, AppState>) -> Res<Status> {
         platform,
         index_url: state.index_url(),
     })
+}
+
+/// Checks why mods might not load; the text report can be shared for support.
+#[tauri::command]
+pub async fn diagnose(state: Tauri<'_, AppState>) -> Res<diagnose::Report> {
+    let platform = platform::detect();
+    let game = state.game().ok();
+    let idx = state.index(false).await.ok();
+    Ok(diagnose::run(
+        game.as_ref(),
+        &platform,
+        &bundled(),
+        idx.as_ref(),
+        env!("CARGO_PKG_VERSION"),
+    ))
 }
 
 #[derive(Serialize)]
